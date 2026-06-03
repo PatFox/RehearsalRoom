@@ -78,12 +78,16 @@ def gen_waveform(song_seed: int, stem_id: str, n: int = 320) -> list:
 _HANDLE_RADIUS = 8   # px — hit area for dragging a loop handle
 _LOOP_FILL   = QColor(46, 107, 255, 38)   # semi-transparent blue fill
 _LOOP_BORDER = QColor(46, 107, 255, 160)  # border / handle colour
+_ZOOM_MIN    = 1.0
+_ZOOM_MAX    = 32.0
+_ZOOM_STEP   = 1.3   # multiplier per wheel click
 
 
 class WaveformWidget(QWidget):
-    seeked        = Signal(float)        # fraction 0-1
-    loop_set      = Signal(float, float) # start_frac, end_frac  (mouse drag to select)
-    handle_moved  = Signal(str, float)   # "start"|"end", new_frac
+    seeked             = Signal(float)        # fraction 0-1
+    loop_set           = Signal(float, float) # start_frac, end_frac
+    handle_moved       = Signal(str, float)   # "start"|"end", new_frac
+    zoom_scroll_changed = Signal(float, float) # zoom, scroll_frac (broadcast to siblings)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -91,14 +95,15 @@ class WaveformWidget(QWidget):
         self._color: str = "#2E6BFF"
         self._progress: float = 0.0
         self._muted: bool = False
-        # Loop region (-1 = not set)
         self._loop_start: float = -1.0
         self._loop_end:   float = -1.0
-        # Interaction state
-        self._drag_mode: str = ""  # "seek" | "loop_new" | "handle_start" | "handle_end"
+        self._drag_mode: str = ""
         self._drag_origin: float = 0.0
         self._loop_preview_start: float = -1.0
         self._loop_preview_end:   float = -1.0
+        # Zoom / scroll
+        self._zoom: float = 1.0
+        self._scroll_frac: float = 0.0   # 0 = leftmost, 1 = rightmost
         self.setMinimumHeight(40)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMouseTracking(True)
@@ -119,10 +124,32 @@ class WaveformWidget(QWidget):
         self.update()
 
     def set_loop_region(self, start: float, end: float):
-        """Pass fractions 0-1; use -1 to clear."""
         self._loop_start = start
         self._loop_end   = end
         self.update()
+
+    def set_zoom_scroll(self, zoom: float, scroll_frac: float):
+        self._zoom = max(_ZOOM_MIN, zoom)
+        self._scroll_frac = max(0.0, min(1.0, scroll_frac))
+        self.update()
+
+    # -------------------------------------------- coordinate helpers
+    def _scroll_px(self) -> float:
+        return self._scroll_frac * self.width() * (self._zoom - 1)
+
+    def _total_w(self) -> float:
+        return self.width() * self._zoom
+
+    def _screen_x(self, frac: float) -> float:
+        """Song fraction → screen x coordinate."""
+        return frac * self._total_w() - self._scroll_px()
+
+    def _frac(self, screen_x: float) -> float:
+        """Screen x → song fraction."""
+        tw = self._total_w()
+        if tw <= 0:
+            return 0.0
+        return max(0.0, min(1.0, (screen_x + self._scroll_px()) / tw))
 
     # --------------------------------------------------------------- painting
     def paintEvent(self, event):
@@ -132,36 +159,46 @@ class WaveformWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
 
-        # --- waveform bars ---
+        scroll_px = self._scroll_px()
+        total_w   = self._total_w()
         n = len(self._data)
-        gap = 1.4
-        bw = w / n
-        bar_w = max(1.0, bw - gap)
-        mid = h / 2
-        max_bar = h * 0.42
-        play_x = w * self._progress
-        col = QColor(self._color)
+        bw_total = total_w / n          # bucket width in zoomed space
+        bar_w    = max(1.0, bw_total - 1.4)
+        mid, max_bar = h / 2, h * 0.42
+        play_x = self._screen_x(self._progress)
+
+        if self._muted:
+            c   = QColor(self._color)
+            lum = int(c.red() * 0.30 + c.green() * 0.59 + c.blue() * 0.11)
+            col = QColor(lum, lum, lum)
+        else:
+            col = QColor(self._color)
+
         for i, amp_norm in enumerate(self._data):
-            x = i * bw + gap / 2
+            x = i * bw_total - scroll_px
+            if x > w + bw_total:
+                break
+            if x + bw_total < 0:
+                continue
             amp = amp_norm * max_bar
-            col.setAlphaF(1.0 if x < play_x else 0.28)
+            if self._muted:
+                col.setAlphaF(0.22)
+            else:
+                col.setAlphaF(1.0 if x < play_x else 0.28)
             painter.fillRect(QRectF(x, mid - amp, bar_w, amp * 2), col)
 
-        # --- loop region (committed or being dragged) ---
+        # --- loop region ---
         ls, le = self._loop_start, self._loop_end
-        # Use preview during active drag
         if self._drag_mode == "loop_new" and self._loop_preview_start >= 0:
-            ls = self._loop_preview_start
-            le = self._loop_preview_end
+            ls, le = self._loop_preview_start, self._loop_preview_end
 
         if ls >= 0 and le > ls:
-            x1, x2 = w * ls, w * le
+            x1, x2 = self._screen_x(ls), self._screen_x(le)
             painter.fillRect(QRectF(x1, 0, x2 - x1, h), _LOOP_FILL)
-            # border lines
             painter.setPen(_LOOP_BORDER)
             painter.drawLine(QPointF(x1, 0), QPointF(x1, h))
             painter.drawLine(QPointF(x2, 0), QPointF(x2, h))
-            # drag handles (circles at top)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(_LOOP_BORDER)
             for hx in (x1, x2):
                 painter.drawEllipse(QPointF(hx, 10), 5, 5)
@@ -169,24 +206,20 @@ class WaveformWidget(QWidget):
         painter.end()
 
     # --------------------------------------------------------------- mouse
-    def _frac(self, x) -> float:
-        return max(0.0, min(1.0, float(x) / max(1, self.width())))
-
-    def _near_handle(self, x) -> str:
-        """Return "start", "end", or "" depending on proximity to loop handles."""
-        w = self.width()
-        if self._loop_start >= 0 and abs(x - w * self._loop_start) <= _HANDLE_RADIUS:
+    def _near_handle(self, screen_x: float) -> str:
+        if self._loop_start >= 0 and abs(screen_x - self._screen_x(self._loop_start)) <= _HANDLE_RADIUS:
             return "start"
-        if self._loop_end >= 0 and abs(x - w * self._loop_end) <= _HANDLE_RADIUS:
+        if self._loop_end >= 0 and abs(screen_x - self._screen_x(self._loop_end)) <= _HANDLE_RADIUS:
             return "end"
         return ""
 
     def mouseMoveEvent(self, e):
         x = e.position().x()
         handle = self._near_handle(x)
-        if handle or (self._loop_start >= 0 and self._loop_end >= 0):
-            self.setCursor(Qt.CursorShape.SizeHorCursor if handle
-                           else Qt.CursorShape.CrossCursor)
+        if handle:
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+        elif self._loop_start >= 0 and self._loop_end >= 0:
+            self.setCursor(Qt.CursorShape.CrossCursor)
         else:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -217,9 +250,7 @@ class WaveformWidget(QWidget):
             self._drag_mode = "handle_start"
         elif handle == "end":
             self._drag_mode = "handle_end"
-        elif e.modifiers() & Qt.KeyboardModifier.ShiftModifier or \
-             (self._loop_start < 0):
-            # Shift+drag or no loop yet → always create new loop via drag
+        elif e.modifiers() & Qt.KeyboardModifier.ShiftModifier or self._loop_start < 0:
             self._drag_mode = "loop_new"
             self._drag_origin = self._frac(x)
             self._loop_preview_start = self._loop_preview_end = self._drag_origin
@@ -231,8 +262,7 @@ class WaveformWidget(QWidget):
         if e.button() != Qt.MouseButton.LeftButton:
             return
         if self._drag_mode == "loop_new":
-            s = self._loop_preview_start
-            end = self._loop_preview_end
+            s, end = self._loop_preview_start, self._loop_preview_end
             if end - s > 0.005:
                 self._loop_start = s
                 self._loop_end   = end
@@ -240,6 +270,101 @@ class WaveformWidget(QWidget):
             self._loop_preview_start = self._loop_preview_end = -1.0
             self.update()
         self._drag_mode = ""
+
+    def wheelEvent(self, e):
+        delta = e.angleDelta().y()
+        if delta == 0:
+            return
+        factor = _ZOOM_STEP if delta > 0 else 1.0 / _ZOOM_STEP
+        cursor_x = e.position().x()
+        cursor_frac = self._frac(cursor_x)   # song fraction under cursor
+        new_zoom = max(_ZOOM_MIN, min(_ZOOM_MAX, self._zoom * factor))
+
+        if new_zoom <= _ZOOM_MIN:
+            self.zoom_scroll_changed.emit(_ZOOM_MIN, 0.0)
+            e.accept()
+            return
+
+        # Keep the song fraction under the cursor fixed on screen
+        w = max(1, self.width())
+        new_scroll_px = cursor_frac * w * new_zoom - cursor_x
+        max_scroll_px = w * (new_zoom - 1)
+        new_scroll_px = max(0.0, min(new_scroll_px, max_scroll_px))
+        new_scroll_frac = new_scroll_px / max_scroll_px if max_scroll_px > 0 else 0.0
+        self.zoom_scroll_changed.emit(new_zoom, new_scroll_frac)
+        e.accept()
+
+
+# ---------------------------------------------------------------------------
+# Waveform scroll bar  (shown below lanes when zoom > 1)
+# ---------------------------------------------------------------------------
+
+class WaveformScrollBar(QWidget):
+    scrolled = Signal(float)   # new scroll_frac 0-1
+
+    def __init__(self, theme=None, parent=None):
+        super().__init__(parent)
+        self._zoom: float = 1.0
+        self._scroll_frac: float = 0.0
+        self._dragging = False
+        self._drag_start_x = 0.0
+        self._drag_start_frac = 0.0
+        self._theme = theme
+        self.setFixedHeight(10)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.hide()
+
+    def set_zoom_scroll(self, zoom: float, scroll_frac: float):
+        self._zoom = zoom
+        self._scroll_frac = scroll_frac
+        self.setVisible(zoom > 1.001)
+        self.update()
+
+    def _handle_rect(self) -> QRectF:
+        w = self.width()
+        hw = max(20.0, w / self._zoom)
+        hx = self._scroll_frac * (w - hw)
+        return QRectF(hx, 1, hw, self.height() - 2)
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        track_col = QColor("#E4E4EC") if (self._theme and not self._theme.dark) else QColor("#2A2A32")
+        handle_col = QColor("#A0A0B0") if (self._theme and not self._theme.dark) else QColor("#5A5A6A")
+        p.fillRect(0, 0, w, h, track_col)
+        r = self._handle_rect()
+        path = QPainterPath()
+        path.addRoundedRect(r, 3, 3)
+        p.fillPath(path, handle_col)
+        p.end()
+
+    def mousePressEvent(self, e):
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        x = e.position().x()
+        r = self._handle_rect()
+        if r.left() <= x <= r.right():
+            self._dragging = True
+            self._drag_start_x    = x
+            self._drag_start_frac = self._scroll_frac
+        else:
+            # Click on track — jump
+            hw = r.width()
+            new_frac = (x - hw / 2) / max(1, self.width() - hw)
+            self.scrolled.emit(max(0.0, min(1.0, new_frac)))
+
+    def mouseMoveEvent(self, e):
+        if not self._dragging:
+            return
+        hw  = self._handle_rect().width()
+        max_x = max(1, self.width() - hw)
+        dx = e.position().x() - self._drag_start_x
+        new_frac = self._drag_start_frac + dx / max_x
+        self.scrolled.emit(max(0.0, min(1.0, new_frac)))
+
+    def mouseReleaseEvent(self, e):
+        self._dragging = False
 
 
 # ---------------------------------------------------------------------------

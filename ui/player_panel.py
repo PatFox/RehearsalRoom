@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.theme import Theme, STEM_IDS, STEM_LABELS
-from ui.widgets import WaveformWidget, ArtThumbnail, gen_waveform
+from ui.widgets import WaveformWidget, WaveformScrollBar, ArtThumbnail, gen_waveform
 
 
 # ---------------------------------------------------------------------------
@@ -226,12 +226,13 @@ class FaderSlider(QWidget):
 
 
 class StemLane(QFrame):
-    mute_toggled   = Signal(str, bool)
-    solo_toggled   = Signal(str, bool)
-    volume_changed = Signal(str, int)
-    seek_requested = Signal(float)
-    loop_set       = Signal(float, float)   # start_frac, end_frac
-    handle_moved   = Signal(str, float)     # "start"|"end", frac
+    mute_toggled        = Signal(str, bool)
+    solo_toggled        = Signal(str, bool)
+    volume_changed      = Signal(str, int)
+    seek_requested      = Signal(float)
+    loop_set            = Signal(float, float)
+    handle_moved        = Signal(str, float)
+    zoom_scroll_changed = Signal(float, float)   # zoom, scroll_frac
 
     LANE_HEIGHT = 116
 
@@ -301,6 +302,7 @@ class StemLane(QFrame):
         self._wave.seeked.connect(self.seek_requested)
         self._wave.loop_set.connect(self.loop_set)
         self._wave.handle_moved.connect(self.handle_moved)
+        self._wave.zoom_scroll_changed.connect(self.zoom_scroll_changed)
         lay.addWidget(self._wave, 1)
 
     def set_progress(self, p: float):
@@ -309,7 +311,17 @@ class StemLane(QFrame):
     def set_loop_region(self, start: float, end: float):
         self._wave.set_loop_region(start, end)
 
+    def set_zoom_scroll(self, zoom: float, scroll_frac: float):
+        self._wave.set_zoom_scroll(zoom, scroll_frac)
+
     def set_audible(self, audible: bool):
+        from PySide6.QtWidgets import QGraphicsOpacityEffect
+        if audible:
+            self.setGraphicsEffect(None)
+        else:
+            effect = QGraphicsOpacityEffect(self)
+            effect.setOpacity(0.38)
+            self.setGraphicsEffect(effect)
         self._wave.set_muted(not audible)
         self._name_lbl.setStyleSheet(
             f"font-size: 14px; font-weight: 600; color: {'#93939C' if not audible else self._theme.ink};"
@@ -685,6 +697,10 @@ class PlayerPanel(QWidget):
         self._loop_end_ms:   float = -1.0
         self._mutes: dict[str, bool] = {}
         self._solos: dict[str, bool] = {}
+        # Zoom / scroll (shared across all lanes)
+        self._zoom: float = 1.0
+        self._scroll_frac: float = 0.0
+        self._auto_center: bool = False
         self._volumes: dict[str, int] = {s: 100 for s in STEM_IDS}
         self._stem_labels: dict[str, str] = {}
         self._lanes: dict[str, StemLane] = {}
@@ -785,6 +801,11 @@ class PlayerPanel(QWidget):
         self._lanes_scroll.setWidget(self._lanes_container)
         timeline_lay.addWidget(self._lanes_scroll, 1)
 
+        # Waveform zoom scrollbar (hidden at 1× zoom)
+        self._waveform_scrollbar = WaveformScrollBar(self._theme)
+        self._waveform_scrollbar.scrolled.connect(self._on_scrollbar_scrolled)
+        timeline_lay.addWidget(self._waveform_scrollbar)
+
         root.addWidget(self._timeline, 1)
 
         # transport
@@ -829,6 +850,10 @@ class PlayerPanel(QWidget):
         self._transport.set_playing(False)
         self._transport.set_time(0)
 
+        self._zoom = 1.0
+        self._scroll_frac = 0.0
+        self._auto_center = False
+
         # Use real waveform data from player if available, else procedural fallback
         waveforms = {}
         if player is not None:
@@ -854,9 +879,10 @@ class PlayerPanel(QWidget):
             lane.mute_toggled.connect(self._on_mute)
             lane.solo_toggled.connect(self._on_solo)
             lane.volume_changed.connect(self._on_volume)
-            lane.seek_requested.connect(self._seek)
+            lane.seek_requested.connect(lambda p: self._seek(p, user_initiated=True))
             lane.loop_set.connect(self._set_loop_from_fracs)
             lane.handle_moved.connect(self._on_handle_moved)
+            lane.zoom_scroll_changed.connect(self._on_zoom_scroll)
             self._lanes_lay.insertWidget(self._lanes_lay.count() - 1, lane)
             self._lanes[sid] = lane
             self._stem_labels[sid] = slbl
@@ -876,6 +902,7 @@ class PlayerPanel(QWidget):
         self._playing = not self._playing
         self._transport.set_playing(self._playing)
         if self._playing:
+            self._auto_center = True   # re-enable centering when playback starts
             self._tick_timer.start()
         else:
             self._tick_timer.stop()
@@ -890,8 +917,10 @@ class PlayerPanel(QWidget):
         self._tick_timer.stop()
         self._update_progress(0.0)
 
-    def _seek(self, progress: float):
+    def _seek(self, progress: float, user_initiated: bool = False):
         self._time_ms = progress * self._duration
+        if user_initiated:
+            self._auto_center = False
         if self._player:
             self._player.seek(self._time_ms)
         self._transport.set_time(int(self._time_ms))
@@ -917,6 +946,8 @@ class PlayerPanel(QWidget):
 
         self._transport.set_time(int(self._time_ms))
         self._update_progress(self._time_ms / self._duration)
+        if self._auto_center:
+            self._center_playhead()
 
     def _update_progress(self, p: float):
         for lane in self._lanes.values():
@@ -983,6 +1014,36 @@ class PlayerPanel(QWidget):
         if self._loop_state == 2:
             if self._time_ms < self._loop_start_ms or self._time_ms >= self._loop_end_ms:
                 self._seek(self._loop_start_ms / self._duration)
+
+    # ------------------------------------------------------------------
+    # Zoom / scroll
+    # ------------------------------------------------------------------
+
+    def _on_zoom_scroll(self, zoom: float, scroll_frac: float):
+        self._zoom = zoom
+        self._scroll_frac = scroll_frac
+        self._auto_center = False   # user zoomed manually — don't override scroll
+        self._apply_zoom_scroll()
+
+    def _on_scrollbar_scrolled(self, scroll_frac: float):
+        self._scroll_frac = scroll_frac
+        self._auto_center = False
+        self._apply_zoom_scroll()
+
+    def _apply_zoom_scroll(self):
+        for lane in self._lanes.values():
+            lane.set_zoom_scroll(self._zoom, self._scroll_frac)
+        self._waveform_scrollbar.set_zoom_scroll(self._zoom, self._scroll_frac)
+
+    def _center_playhead(self):
+        """Scroll so the playhead sits in the middle of the visible window."""
+        if self._zoom <= 1.0 or self._duration <= 0:
+            return
+        progress = self._time_ms / self._duration
+        vis = 1.0 / self._zoom          # visible fraction of total
+        ideal = (progress - vis / 2) / max(1e-9, 1.0 - vis)
+        self._scroll_frac = max(0.0, min(1.0, ideal))
+        self._apply_zoom_scroll()
 
     # ------------------------------------------------------------------
     # Mixer controls
