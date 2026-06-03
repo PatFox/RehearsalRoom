@@ -157,7 +157,13 @@ class StemPlayer:
 
     def seek(self, ms: float) -> None:
         with self._lock:
-            self._pos = max(0, min(int(ms / 1000.0 * self._sr), self._max_len - 1))
+            # Convert song-time ms → fraction → sample position in active (possibly
+            # stretched) audio. Using raw `ms * sr` is only correct for 1× speed;
+            # at other speeds the active audio has a different length than the original.
+            original_len = max((len(d) for d in self._stems.values()), default=1)
+            song_dur_ms = original_len / max(self._sr, 1) * 1000.0
+            frac = ms / max(song_dur_ms, 1.0)
+            self._pos = max(0, min(int(frac * self._max_len), self._max_len - 1))
 
     def position_ms(self) -> float:
         # Convert pos in active (possibly stretched) audio back to song-time ms

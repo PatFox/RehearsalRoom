@@ -7,7 +7,7 @@ Faithfully implements the design prototype (player.jsx) and adds:
 from __future__ import annotations
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, QTimer, QRectF
+from PySide6.QtCore import Qt, Signal, Slot, QTimer, QRectF
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -421,15 +421,29 @@ class TransportBar(QFrame):
         self._speed_val_lbl.setFixedWidth(34)
         self._speed_slider.valueChanged.connect(self._on_speed)
         self._speed_slider.mouseDoubleClickEvent = lambda e: self._reset_speed()
-        self._speed_busy = QLabel("⟳")
-        self._speed_busy.setStyleSheet(
-            f"font-size: 13px; color: {self._theme.accent};"
+
+        # Animated processing indicator
+        self._speed_spinner = QLabel()
+        self._speed_spinner.setStyleSheet(
+            f"font-size: 12px; color: {self._theme.accent}; font-family: monospace;"
         )
-        self._speed_busy.setFixedWidth(16)
-        self._speed_busy.hide()
+        self._speed_spinner.setFixedWidth(14)
+        self._speed_spinner_lbl = QLabel("applying…")
+        self._speed_spinner_lbl.setStyleSheet(
+            f"font-size: 11px; color: {self._theme.ink3}; font-style: italic;"
+        )
+        self._speed_busy_timer = QTimer()
+        self._speed_busy_timer.setInterval(80)
+        self._speed_busy_timer.timeout.connect(self._tick_spinner)
+        self._spinner_frames = "⣾⣽⣻⢿⡿⣟⣯⣷"
+        self._spinner_idx = 0
+        self._speed_spinner.hide()
+        self._speed_spinner_lbl.hide()
+
         speed_row.addWidget(self._speed_slider)
         speed_row.addWidget(self._speed_val_lbl)
-        speed_row.addWidget(self._speed_busy)
+        speed_row.addWidget(self._speed_spinner)
+        speed_row.addWidget(self._speed_spinner_lbl)
         speed_group.addWidget(speed_lbl)
         speed_group.addLayout(speed_row)
         lay.addLayout(speed_group)
@@ -494,6 +508,26 @@ class TransportBar(QFrame):
 
     def _reset_speed(self):
         self._speed_slider.setValue(100)
+
+    def _tick_spinner(self):
+        self._spinner_idx = (self._spinner_idx + 1) % len(self._spinner_frames)
+        self._speed_spinner.setText(self._spinner_frames[self._spinner_idx])
+
+    @Slot()
+    def show_speed_busy(self):
+        self._speed_slider.setEnabled(False)
+        self._spinner_idx = 0
+        self._speed_spinner.setText(self._spinner_frames[0])
+        self._speed_spinner.show()
+        self._speed_spinner_lbl.show()
+        self._speed_busy_timer.start()
+
+    @Slot()
+    def hide_speed_busy(self):
+        self._speed_busy_timer.stop()
+        self._speed_spinner.hide()
+        self._speed_spinner_lbl.hide()
+        self._speed_slider.setEnabled(True)
 
     def set_loop_state(self, state: int):
         """0 = no loop, 1 = start set, 2 = loop active."""
@@ -766,9 +800,9 @@ class PlayerPanel(QWidget):
         if player is not None:
             from PySide6.QtCore import QMetaObject, Qt
             player.on_stretch_started = lambda: QMetaObject.invokeMethod(
-                self._transport._speed_busy, "show", Qt.ConnectionType.QueuedConnection)
+                self._transport, "show_speed_busy", Qt.ConnectionType.QueuedConnection)
             player.on_stretch_done = lambda: QMetaObject.invokeMethod(
-                self._transport._speed_busy, "hide", Qt.ConnectionType.QueuedConnection)
+                self._transport, "hide_speed_busy", Qt.ConnectionType.QueuedConnection)
         self._duration = song.get("durationMs", 180_000)
         self._time_ms = 0.0
         self._playing = False
