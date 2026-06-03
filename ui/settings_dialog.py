@@ -116,7 +116,7 @@ class SettingsDialog(QDialog):
 
         self._vidami_check = QCheckBox("Enable Vidami footswitch support")
         self._vidami_check.setChecked(bool(S.get("vidami_enabled")))
-        self._vidami_check.setStyleSheet(f"font-size: 13px; color: {self._theme.ink1};")
+        self._vidami_check.setStyleSheet(f"font-size: 13px; color: {self._theme.ink};")
         lay.addWidget(self._vidami_check)
 
         vidami_hint = QLabel(

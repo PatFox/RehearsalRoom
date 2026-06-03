@@ -282,6 +282,11 @@ class _FootswitchFilter(QObject):
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.KeyPress and S.get("vidami_enabled"):
+            # Don't intercept when a text input has focus
+            from PySide6.QtWidgets import QApplication, QLineEdit, QTextEdit, QPlainTextEdit
+            focused = QApplication.focusWidget()
+            if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit)):
+                return False
             char = event.text()
             if char in _VIDAMI_CHARS:
                 if self._panel.handle_footswitch(char):
