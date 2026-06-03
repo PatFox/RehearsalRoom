@@ -1,6 +1,6 @@
 """Main window — sidebar + stacked content area (library / player)."""
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QObject, QEvent
 from PySide6.QtGui import QColor, QPalette, QFont
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
@@ -269,6 +269,26 @@ class Sidebar(QFrame):
         """)
 
 
+_VIDAMI_CHARS = frozenset('{K}`};')
+
+
+class _FootswitchFilter(QObject):
+    """Application-level event filter that routes Vidami footswitch key presses
+    to the PlayerPanel regardless of which widget currently has focus."""
+
+    def __init__(self, player_panel, parent=None):
+        super().__init__(parent)
+        self._panel = player_panel
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.KeyPress:
+            char = event.text()
+            if char in _VIDAMI_CHARS:
+                if self._panel.handle_footswitch(char):
+                    return True   # consumed — don't propagate
+        return False
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -287,6 +307,11 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._apply_theme()
         self._load_library()
+
+        # Global key filter so Vidami footswitch works regardless of focus
+        self._footswitch_filter = _FootswitchFilter(self._player, self)
+        from PySide6.QtWidgets import QApplication
+        QApplication.instance().installEventFilter(self._footswitch_filter)
 
     def _setup_ui(self):
         central = QWidget()

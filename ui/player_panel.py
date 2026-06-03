@@ -513,6 +513,13 @@ class TransportBar(QFrame):
         self._spinner_idx = (self._spinner_idx + 1) % len(self._spinner_frames)
         self._speed_spinner.setText(self._spinner_frames[self._spinner_idx])
 
+    def set_speed(self, rate: float):
+        """Move the speed slider to match a given rate (0.5–2.0) without re-emitting."""
+        self._speed_slider.blockSignals(True)
+        self._speed_slider.setValue(int(round(rate * 100)))
+        self._speed_val_lbl.setText(f"{int(round(rate * 100))}%")
+        self._speed_slider.blockSignals(False)
+
     @Slot()
     def show_speed_busy(self):
         self._speed_slider.setEnabled(False)
@@ -671,6 +678,7 @@ class PlayerPanel(QWidget):
         self._duration = 1
         self._playing = False
         self._time_ms = 0.0
+        self._tempo_rate = 1.0
         # Loop state: 0=none 1=start-set 2=active
         self._loop_state: int = 0
         self._loop_start_ms: float = -1.0
@@ -1011,6 +1019,7 @@ class PlayerPanel(QWidget):
             self._player.set_master_volume(v / 100.0)
 
     def _on_tempo_changed(self, rate: float):
+        self._tempo_rate = rate
         if self._player:
             self._player.set_tempo(rate)
 
@@ -1046,7 +1055,37 @@ class PlayerPanel(QWidget):
     # Keyboard
     # ------------------------------------------------------------------
 
+    def handle_footswitch(self, char: str) -> bool:
+        """Handle a Vidami footswitch character. Returns True if consumed."""
+        if char == 'K':
+            self._toggle_play()
+        elif char == '{':
+            self._seek(max(0.0, (self._time_ms - 2000) / self._duration))
+        elif char == '}':
+            self._seek(min(1.0, (self._time_ms + 2000) / self._duration))
+        elif char == '`':
+            self._vidami_speed_down()
+        elif char == ';':
+            self._on_loop_button()
+        else:
+            return False
+        return True
+
+    def _vidami_speed_down(self):
+        """Reduce speed by 10 %. At 50 % (minimum), next press resets to 100 %."""
+        current = round(self._tempo_rate, 2)
+        if current <= 0.50:
+            new_rate = 1.0          # reset
+        else:
+            new_rate = max(0.50, current - 0.10)
+        # Update via slider so the display stays in sync
+        self._transport.set_speed(new_rate)
+        self._on_tempo_changed(new_rate)
+
     def keyPressEvent(self, e):
+        text = e.text()
+        if text and self.handle_footswitch(text):
+            return
         if e.key() == Qt.Key.Key_Space:
             self._toggle_play()
         elif e.key() == Qt.Key.Key_L:
