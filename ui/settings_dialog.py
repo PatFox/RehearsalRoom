@@ -5,7 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QLineEdit, QFileDialog, QFrame
+    QPushButton, QLineEdit, QFileDialog, QFrame, QCheckBox
 )
 
 from core import settings as S
@@ -101,6 +101,32 @@ class SettingsDialog(QDialog):
         acoustid_hint.setStyleSheet(f"font-size: 12px; color: {self._theme.ink3};")
         lay.addWidget(acoustid_hint)
 
+        # divider
+        div3 = QFrame()
+        div3.setFrameShape(QFrame.Shape.HLine)
+        div3.setStyleSheet(f"color: {self._theme.border};")
+        lay.addWidget(div3)
+
+        # Vidami footswitch
+        vidami_lbl = QLabel("HARDWARE")
+        vidami_lbl.setStyleSheet(
+            f"font-size: 11px; font-weight: 600; letter-spacing: 0.07em; color: {self._theme.ink3};"
+        )
+        lay.addWidget(vidami_lbl)
+
+        self._vidami_check = QCheckBox("Enable Vidami footswitch support")
+        self._vidami_check.setChecked(bool(S.get("vidami_enabled")))
+        self._vidami_check.setStyleSheet(f"font-size: 13px; color: {self._theme.ink1};")
+        lay.addWidget(self._vidami_check)
+
+        vidami_hint = QLabel(
+            "Intercepts footswitch key commands ({  K  }  `  ;) app-wide. "
+            "Disable if these keys conflict with other software."
+        )
+        vidami_hint.setWordWrap(True)
+        vidami_hint.setStyleSheet(f"font-size: 12px; color: {self._theme.ink3};")
+        lay.addWidget(vidami_hint)
+
         lay.addStretch()
 
         # footer
@@ -130,6 +156,7 @@ class SettingsDialog(QDialog):
         data = S.load()
         data["library_path"] = path
         data["acoustid_api_key"] = self._acoustid_input.text().strip()
+        data["vidami_enabled"] = self._vidami_check.isChecked()
         S.save(data)
         self.library_changed.emit(path)
         self.accept()

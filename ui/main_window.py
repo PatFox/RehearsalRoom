@@ -281,7 +281,7 @@ class _FootswitchFilter(QObject):
         self._panel = player_panel
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.KeyPress:
+        if event.type() == QEvent.Type.KeyPress and S.get("vidami_enabled"):
             char = event.text()
             if char in _VIDAMI_CHARS:
                 if self._panel.handle_footswitch(char):

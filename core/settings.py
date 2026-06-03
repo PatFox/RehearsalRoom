@@ -10,6 +10,7 @@ _DEFAULT_LIBRARY = Path.home() / "Music" / "RehearsalRoom"
 _DEFAULTS = {
     "library_path": str(_DEFAULT_LIBRARY),
     "acoustid_api_key": "",
+    "vidami_enabled": False,
 }
 
 
