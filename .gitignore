@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.spec
+.venv/
+venv/
+env/
+
+# PyInstaller build artefacts
+dist/
+build/
+
+# ML model cache (large, re-downloaded on first run)
+*.pt
+*.pth
+*.ckpt
+
+# Audio temp files
+rehearsalroom_*/
+
+# App data / user settings
+# (settings.json lives in ~/.rehearsalroom/ outside the repo)
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Bundled binaries (too large for git; document in README)
+bin/ffmpeg.exe
+bin/ffprobe.exe
+bin/fpcalc.exe

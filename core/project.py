@@ -1,0 +1,159 @@
+"""Read and write .stems files (ZIP container with FLAC stems + JSON manifest)."""
+
+import json
+import shutil
+import zipfile
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
+from typing import Optional
+
+import soundfile as sf
+import numpy as np
+
+
+MANIFEST_VERSION = "1"
+
+STEM_COLORS = {
+    "vocals": "#E74C3C",
+    "drums":  "#3498DB",
+    "bass":   "#2ECC71",
+    "other":  "#9B59B6",
+    "guitar": "#F39C12",
+    "piano":  "#1ABC9C",
+}
+
+
+@dataclass
+class StemInfo:
+    id: str
+    file: str
+    label: str
+    color: str = ""
+
+    def __post_init__(self):
+        if not self.color:
+            self.color = STEM_COLORS.get(self.id, "#888888")
+
+
+@dataclass
+class StemsManifest:
+    version: str = MANIFEST_VERSION
+    title: str = ""
+    artist: str = ""
+    source_url: str = ""
+    duration_ms: int = 0
+    stems: list[StemInfo] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "StemsManifest":
+        stems = [StemInfo(**s) for s in d.get("stems", [])]
+        return cls(
+            version=d.get("version", MANIFEST_VERSION),
+            title=d.get("title", ""),
+            artist=d.get("artist", ""),
+            source_url=d.get("source_url", ""),
+            duration_ms=d.get("duration_ms", 0),
+            stems=stems,
+        )
+
+
+@dataclass
+class StemsProject:
+    manifest: StemsManifest
+    stem_paths: dict[str, Path]  # stem_id -> path to extracted FLAC on disk
+    source_path: Optional[Path] = None  # path to the .stems file
+
+
+def save_stems(
+    wav_paths: dict[str, Path],
+    output_path: Path,
+    title: str = "",
+    artist: str = "",
+    source_url: str = "",
+    stem_labels: Optional[dict[str, str]] = None,
+) -> StemsProject:
+    """Convert WAV stem files to FLAC and pack into a .stems ZIP archive."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    stem_infos: list[StemInfo] = []
+    flac_paths: dict[str, Path] = {}
+    duration_ms = 0
+
+    tmp_dir = output_path.parent / (output_path.stem + "_tmp")
+    tmp_dir.mkdir(exist_ok=True)
+
+    try:
+        for stem_id, wav_path in wav_paths.items():
+            flac_path = tmp_dir / f"{stem_id}.flac"
+            data, samplerate = sf.read(str(wav_path))
+            sf.write(str(flac_path), data, samplerate, format="FLAC")
+            flac_paths[stem_id] = flac_path
+
+            if duration_ms == 0:
+                duration_ms = int(len(data) / samplerate * 1000)
+
+            label = (stem_labels or {}).get(stem_id, stem_id.capitalize())
+            stem_infos.append(StemInfo(id=stem_id, file=f"{stem_id}.flac", label=label))
+
+        manifest = StemsManifest(
+            title=title,
+            artist=artist,
+            source_url=source_url,
+            duration_ms=duration_ms,
+            stems=stem_infos,
+        )
+
+        with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_STORED) as zf:
+            zf.writestr("manifest.json", json.dumps(manifest.to_dict(), indent=2))
+            for stem_id, flac_path in flac_paths.items():
+                zf.write(flac_path, f"{stem_id}.flac")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return StemsProject(manifest=manifest, stem_paths=flac_paths, source_path=output_path)
+
+
+def load_stems(stems_path: Path, extract_dir: Optional[Path] = None) -> StemsProject:
+    """Extract a .stems file and return a StemsProject with paths to the FLAC files."""
+    stems_path = Path(stems_path)
+    if extract_dir is None:
+        import tempfile
+        extract_dir = Path(tempfile.mkdtemp(prefix="rehearsalroom_"))
+    else:
+        extract_dir = Path(extract_dir)
+        extract_dir.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(stems_path, "r") as zf:
+        zf.extractall(extract_dir)
+
+    manifest_path = extract_dir / "manifest.json"
+    with open(manifest_path, encoding="utf-8") as f:
+        manifest = StemsManifest.from_dict(json.load(f))
+
+    stem_paths = {s.id: extract_dir / s.file for s in manifest.stems}
+    return StemsProject(manifest=manifest, stem_paths=stem_paths, source_path=stems_path)
+
+
+def read_manifest(stems_path: Path) -> StemsManifest:
+    """Read only the manifest from a .stems file without extracting audio."""
+    with zipfile.ZipFile(stems_path, "r") as zf:
+        with zf.open("manifest.json") as f:
+            return StemsManifest.from_dict(json.load(f))
+
+
+def update_manifest(stems_path: Path, manifest: StemsManifest) -> None:
+    """Rewrite the manifest.json inside an existing .stems file."""
+    import tempfile, os
+    tmp = Path(tempfile.mktemp(suffix=".stems"))
+    with zipfile.ZipFile(stems_path, "r") as zin, zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_STORED) as zout:
+        for item in zin.infolist():
+            if item.filename == "manifest.json":
+                zout.writestr("manifest.json", json.dumps(manifest.to_dict(), indent=2))
+            else:
+                zout.writestr(item, zin.read(item.filename))
+    os.replace(tmp, stems_path)

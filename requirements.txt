@@ -1,0 +1,26 @@
+# Core
+PySide6>=6.6
+numpy
+
+# Stem separation
+demucs>=4.0
+torch
+torchaudio
+
+# Audio I/O + playback
+soundfile
+sounddevice
+
+# YouTube download
+yt-dlp
+imageio-ffmpeg   # bundles a working static ffmpeg binary, no DLL issues
+
+# Metadata
+mutagen          # reads embedded ID3/Vorbis/MP4 tags from local files
+pyacoustid       # AcoustID fingerprinting + MusicBrainz lookup (needs API key)
+
+# Tempo control (pitch-preserving) — optional but recommended
+pyrubberband
+
+# Packaging
+pyinstaller
