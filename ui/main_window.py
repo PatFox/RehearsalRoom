@@ -278,6 +278,7 @@ class MainWindow(QMainWindow):
 
         self._theme = Theme()
         self._songs: list[dict] = []
+        self._current_song: dict | None = None
         self._worker: SeparatorWorker | None = None
         self._dl_worker: DownloaderWorker | None = None
         self._proc_dlg: ProcessingDialog | None = None
@@ -352,6 +353,7 @@ class MainWindow(QMainWindow):
         self._player = PlayerPanel(self._theme)
         self._player.back_clicked.connect(self._go_library)
         self._player.export_clicked.connect(self._on_export)
+        self._player.save_metadata.connect(self._on_save_metadata)
         self._stack.addWidget(self._player)   # index 1
 
         main_lay.addWidget(self._stack, 1)
@@ -366,6 +368,7 @@ class MainWindow(QMainWindow):
         self._topbar.show()
 
     def _open_song(self, song: dict):
+        self._current_song = song
         audio_player = None
         stems_path = song.get("stems_path")
         if stems_path:
@@ -515,6 +518,47 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self._theme, self)
         dlg.library_changed.connect(lambda _: self._load_library())
         dlg.exec()
+
+    # ------------------------------------------------------------------
+    # Metadata save
+    # ------------------------------------------------------------------
+
+    def _on_save_metadata(self, data: dict):
+        song = self._current_song
+        if not song:
+            return
+        stems_path = song.get("stems_path")
+        if not stems_path:
+            return  # demo/unsaved song — nothing to write to
+
+        from core.project import read_manifest, update_manifest
+        try:
+            manifest = read_manifest(Path(stems_path))
+            manifest.title  = data.get("title",  manifest.title)
+            manifest.artist = data.get("artist", manifest.artist)
+
+            # Update stem labels in the manifest
+            new_labels = data.get("stem_labels", {})
+            for stem in manifest.stems:
+                if stem.id in new_labels:
+                    stem.label = new_labels[stem.id]
+
+            update_manifest(Path(stems_path), manifest)
+
+            # Keep the in-memory song list in sync so the library reflects the change
+            new_title = manifest.title
+            new_artist = manifest.artist
+            song["title"]  = new_title
+            song["artist"] = new_artist
+            for s in self._songs:
+                if s.get("stems_path") == stems_path:
+                    s["title"]  = new_title
+                    s["artist"] = new_artist
+                    break
+            self._library.set_songs(self._songs)
+
+        except Exception as exc:
+            _ErrorDialog(f"Could not save metadata:\n\n{exc}", self).exec()
 
     # ------------------------------------------------------------------
     # Export

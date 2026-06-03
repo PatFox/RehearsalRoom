@@ -226,10 +226,12 @@ class FaderSlider(QWidget):
 
 
 class StemLane(QFrame):
-    mute_toggled = Signal(str, bool)
-    solo_toggled = Signal(str, bool)
+    mute_toggled   = Signal(str, bool)
+    solo_toggled   = Signal(str, bool)
     volume_changed = Signal(str, int)
     seek_requested = Signal(float)
+    loop_set       = Signal(float, float)   # start_frac, end_frac
+    handle_moved   = Signal(str, float)     # "start"|"end", frac
 
     LANE_HEIGHT = 116
 
@@ -297,10 +299,15 @@ class StemLane(QFrame):
         self._wave = WaveformWidget()
         self._wave.set_data(wavedata, color)
         self._wave.seeked.connect(self.seek_requested)
+        self._wave.loop_set.connect(self.loop_set)
+        self._wave.handle_moved.connect(self.handle_moved)
         lay.addWidget(self._wave, 1)
 
     def set_progress(self, p: float):
         self._wave.set_progress(p)
+
+    def set_loop_region(self, start: float, end: float):
+        self._wave.set_loop_region(start, end)
 
     def set_audible(self, audible: bool):
         self._wave.set_muted(not audible)
@@ -320,7 +327,7 @@ class TransportBar(QFrame):
     play_pause = Signal()
     stop = Signal()
     restart = Signal()
-    loop_toggled = Signal(bool)
+    loop_clicked = Signal()   # cycles through 3 states; PlayerPanel owns the state
     master_changed = Signal(int)
     tempo_changed = Signal(float)
 
@@ -376,9 +383,8 @@ class TransportBar(QFrame):
         stop_btn.clicked.connect(self.stop)
         ctrl.addWidget(stop_btn)
 
-        self._loop_btn = self._tbtn("🔁", "Loop (L)")
-        self._loop_btn.setCheckable(True)
-        self._loop_btn.toggled.connect(self.loop_toggled)
+        self._loop_btn = self._tbtn("⊙", "Click to set loop start (L)")
+        self._loop_btn.clicked.connect(self.loop_clicked)
         ctrl.addWidget(self._loop_btn)
 
         lay.addLayout(ctrl)
@@ -415,8 +421,15 @@ class TransportBar(QFrame):
         self._speed_val_lbl.setFixedWidth(34)
         self._speed_slider.valueChanged.connect(self._on_speed)
         self._speed_slider.mouseDoubleClickEvent = lambda e: self._reset_speed()
+        self._speed_busy = QLabel("⟳")
+        self._speed_busy.setStyleSheet(
+            f"font-size: 13px; color: {self._theme.accent};"
+        )
+        self._speed_busy.setFixedWidth(16)
+        self._speed_busy.hide()
         speed_row.addWidget(self._speed_slider)
         speed_row.addWidget(self._speed_val_lbl)
+        speed_row.addWidget(self._speed_busy)
         speed_group.addWidget(speed_lbl)
         speed_group.addLayout(speed_row)
         lay.addLayout(speed_group)
@@ -481,6 +494,23 @@ class TransportBar(QFrame):
 
     def _reset_speed(self):
         self._speed_slider.setValue(100)
+
+    def set_loop_state(self, state: int):
+        """0 = no loop, 1 = start set, 2 = loop active."""
+        icons   = ["⊙", "⊙", "⊛"]
+        tips    = ["Click to set loop start (L)",
+                   "Click to set loop end (L)",
+                   "Click to clear loop (L)"]
+        colours = [self._theme.ink2,
+                   "#F2A23A",          # orange = waiting for end point
+                   self._theme.accent] # blue   = loop active
+        self._loop_btn.setText(icons[state])
+        self._loop_btn.setToolTip(tips[state])
+        self._loop_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border-radius: 21px; "
+            f"font-size: 16px; color: {colours[state]}; }}"
+            f"QPushButton:hover {{ background: {self._theme.surface2}; }}"
+        )
 
     def set_playing(self, playing: bool):
         self._play_btn.setText("⏸" if playing else "▶")
@@ -607,7 +637,10 @@ class PlayerPanel(QWidget):
         self._duration = 1
         self._playing = False
         self._time_ms = 0.0
-        self._loop = False
+        # Loop state: 0=none 1=start-set 2=active
+        self._loop_state: int = 0
+        self._loop_start_ms: float = -1.0
+        self._loop_end_ms:   float = -1.0
         self._mutes: dict[str, bool] = {}
         self._solos: dict[str, bool] = {}
         self._volumes: dict[str, int] = {s: 100 for s in STEM_IDS}
@@ -717,7 +750,7 @@ class PlayerPanel(QWidget):
         self._transport.play_pause.connect(self._toggle_play)
         self._transport.stop.connect(self._stop)
         self._transport.restart.connect(lambda: self._seek(0.0))
-        self._transport.loop_toggled.connect(lambda v: setattr(self, '_loop', v))
+        self._transport.loop_clicked.connect(self._on_loop_button)
         self._transport.master_changed.connect(self._on_master_changed)
         self._transport.tempo_changed.connect(self._on_tempo_changed)
         root.addWidget(self._transport)
@@ -730,6 +763,12 @@ class PlayerPanel(QWidget):
         """Load a song dict (from library) into the player panel."""
         self._song = song
         self._player = player
+        if player is not None:
+            from PySide6.QtCore import QMetaObject, Qt
+            player.on_stretch_started = lambda: QMetaObject.invokeMethod(
+                self._transport._speed_busy, "show", Qt.ConnectionType.QueuedConnection)
+            player.on_stretch_done = lambda: QMetaObject.invokeMethod(
+                self._transport._speed_busy, "hide", Qt.ConnectionType.QueuedConnection)
         self._duration = song.get("durationMs", 180_000)
         self._time_ms = 0.0
         self._playing = False
@@ -774,6 +813,8 @@ class PlayerPanel(QWidget):
             lane.solo_toggled.connect(self._on_solo)
             lane.volume_changed.connect(self._on_volume)
             lane.seek_requested.connect(self._seek)
+            lane.loop_set.connect(self._set_loop_from_fracs)
+            lane.handle_moved.connect(self._on_handle_moved)
             self._lanes_lay.insertWidget(self._lanes_lay.count() - 1, lane)
             self._lanes[sid] = lane
             self._stem_labels[sid] = slbl
@@ -818,23 +859,88 @@ class PlayerPanel(QWidget):
         if self._player:
             self._time_ms = self._player.position_ms()
         else:
-            self._time_ms += 40  # fake clock for demo mode
+            self._time_ms += 40
+
+        # Loop-back when active
+        if self._loop_state == 2 and self._loop_end_ms > 0:
+            if self._time_ms >= self._loop_end_ms:
+                self._seek(self._loop_start_ms / self._duration)
+                return
+
         if self._time_ms >= self._duration:
-            if self._loop:
-                self._time_ms %= self._duration
-                if self._player:
-                    self._player.seek(0)
-            else:
-                self._time_ms = self._duration
-                self._playing = False
-                self._transport.set_playing(False)
-                self._tick_timer.stop()
+            self._time_ms = self._duration
+            self._playing = False
+            self._transport.set_playing(False)
+            self._tick_timer.stop()
+
         self._transport.set_time(int(self._time_ms))
         self._update_progress(self._time_ms / self._duration)
 
     def _update_progress(self, p: float):
         for lane in self._lanes.values():
             lane.set_progress(p)
+
+    # ------------------------------------------------------------------
+    # Loop state machine
+    # ------------------------------------------------------------------
+
+    def _on_loop_button(self):
+        if self._loop_state == 0:
+            self._loop_start_ms = self._time_ms
+            self._loop_state = 1
+            self._transport.set_loop_state(1)
+            self._update_loop_display()
+        elif self._loop_state == 1:
+            end = self._time_ms
+            if end > self._loop_start_ms + 100:
+                self._loop_end_ms = end
+                self._loop_state = 2
+                self._transport.set_loop_state(2)
+                self._update_loop_display()
+        else:
+            self._clear_loop()
+
+    def _clear_loop(self):
+        self._loop_start_ms = -1.0
+        self._loop_end_ms   = -1.0
+        self._loop_state    = 0
+        self._transport.set_loop_state(0)
+        self._update_loop_display()
+
+    def _set_loop_from_fracs(self, start_frac: float, end_frac: float):
+        """Called when the user drags a selection on a waveform."""
+        self._loop_start_ms = start_frac * self._duration
+        self._loop_end_ms   = end_frac   * self._duration
+        self._loop_state    = 2
+        self._transport.set_loop_state(2)
+        self._update_loop_display()
+
+    def _on_handle_moved(self, which: str, frac: float):
+        if which == "start":
+            self._loop_start_ms = frac * self._duration
+        else:
+            self._loop_end_ms = frac * self._duration
+        # keep state=2 and broadcast new fracs to all other lanes
+        self._update_loop_display()
+
+    def _update_loop_display(self):
+        if self._duration <= 0:
+            return
+        if self._loop_state >= 1:
+            start_frac = self._loop_start_ms / self._duration
+        else:
+            start_frac = -1.0
+        if self._loop_state == 2:
+            end_frac = self._loop_end_ms / self._duration
+        else:
+            end_frac = -1.0
+        for lane in self._lanes.values():
+            lane.set_loop_region(start_frac, end_frac)
+
+        # If the loop is fully defined and the playhead is outside it, jump to start
+        if self._loop_state == 2:
+            if self._time_ms < self._loop_start_ms or self._time_ms >= self._loop_end_ms:
+                self._seek(self._loop_start_ms / self._duration)
 
     # ------------------------------------------------------------------
     # Mixer controls
@@ -910,8 +1016,7 @@ class PlayerPanel(QWidget):
         if e.key() == Qt.Key.Key_Space:
             self._toggle_play()
         elif e.key() == Qt.Key.Key_L:
-            self._loop = not self._loop
-            self._transport._loop_btn.setChecked(self._loop)
+            self._on_loop_button()
         elif e.key() == Qt.Key.Key_Left:
             self._seek(max(0.0, (self._time_ms - 5000) / self._duration))
         elif e.key() == Qt.Key.Key_Right:

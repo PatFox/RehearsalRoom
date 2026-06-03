@@ -75,8 +75,15 @@ def gen_waveform(song_seed: int, stem_id: str, n: int = 320) -> list:
 # Waveform canvas widget
 # ---------------------------------------------------------------------------
 
+_HANDLE_RADIUS = 8   # px — hit area for dragging a loop handle
+_LOOP_FILL   = QColor(46, 107, 255, 38)   # semi-transparent blue fill
+_LOOP_BORDER = QColor(46, 107, 255, 160)  # border / handle colour
+
+
 class WaveformWidget(QWidget):
-    seeked = Signal(float)  # 0-1
+    seeked        = Signal(float)        # fraction 0-1
+    loop_set      = Signal(float, float) # start_frac, end_frac  (mouse drag to select)
+    handle_moved  = Signal(str, float)   # "start"|"end", new_frac
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -84,11 +91,19 @@ class WaveformWidget(QWidget):
         self._color: str = "#2E6BFF"
         self._progress: float = 0.0
         self._muted: bool = False
+        # Loop region (-1 = not set)
+        self._loop_start: float = -1.0
+        self._loop_end:   float = -1.0
+        # Interaction state
+        self._drag_mode: str = ""  # "seek" | "loop_new" | "handle_start" | "handle_end"
+        self._drag_origin: float = 0.0
+        self._loop_preview_start: float = -1.0
+        self._loop_preview_end:   float = -1.0
         self.setMinimumHeight(40)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._dragging = False
+        self.setMouseTracking(True)
 
+    # ------------------------------------------------------------------ data
     def set_data(self, data: list, color: str):
         self._data = data
         self._color = color
@@ -103,13 +118,21 @@ class WaveformWidget(QWidget):
         self._muted = m
         self.update()
 
+    def set_loop_region(self, start: float, end: float):
+        """Pass fractions 0-1; use -1 to clear."""
+        self._loop_start = start
+        self._loop_end   = end
+        self.update()
+
+    # --------------------------------------------------------------- painting
     def paintEvent(self, event):
         if not self._data:
             return
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w = self.width()
-        h = self.height()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+
+        # --- waveform bars ---
         n = len(self._data)
         gap = 1.4
         bw = w / n
@@ -117,31 +140,106 @@ class WaveformWidget(QWidget):
         mid = h / 2
         max_bar = h * 0.42
         play_x = w * self._progress
-
         col = QColor(self._color)
         for i, amp_norm in enumerate(self._data):
             x = i * bw + gap / 2
             amp = amp_norm * max_bar
-            played = x < play_x
-            col.setAlphaF(1.0 if played else 0.28)
-            p.fillRect(QRectF(x, mid - amp, bar_w, amp * 2), col)
+            col.setAlphaF(1.0 if x < play_x else 0.28)
+            painter.fillRect(QRectF(x, mid - amp, bar_w, amp * 2), col)
 
-        p.end()
+        # --- loop region (committed or being dragged) ---
+        ls, le = self._loop_start, self._loop_end
+        # Use preview during active drag
+        if self._drag_mode == "loop_new" and self._loop_preview_start >= 0:
+            ls = self._loop_preview_start
+            le = self._loop_preview_end
 
-    def _pos_to_progress(self, x: int) -> float:
-        return max(0.0, min(1.0, x / self.width()))
+        if ls >= 0 and le > ls:
+            x1, x2 = w * ls, w * le
+            painter.fillRect(QRectF(x1, 0, x2 - x1, h), _LOOP_FILL)
+            # border lines
+            painter.setPen(_LOOP_BORDER)
+            painter.drawLine(QPointF(x1, 0), QPointF(x1, h))
+            painter.drawLine(QPointF(x2, 0), QPointF(x2, h))
+            # drag handles (circles at top)
+            painter.setBrush(_LOOP_BORDER)
+            for hx in (x1, x2):
+                painter.drawEllipse(QPointF(hx, 10), 5, 5)
 
-    def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self._dragging = True
-            self.seeked.emit(self._pos_to_progress(e.position().x()))
+        painter.end()
+
+    # --------------------------------------------------------------- mouse
+    def _frac(self, x) -> float:
+        return max(0.0, min(1.0, float(x) / max(1, self.width())))
+
+    def _near_handle(self, x) -> str:
+        """Return "start", "end", or "" depending on proximity to loop handles."""
+        w = self.width()
+        if self._loop_start >= 0 and abs(x - w * self._loop_start) <= _HANDLE_RADIUS:
+            return "start"
+        if self._loop_end >= 0 and abs(x - w * self._loop_end) <= _HANDLE_RADIUS:
+            return "end"
+        return ""
 
     def mouseMoveEvent(self, e):
-        if self._dragging:
-            self.seeked.emit(self._pos_to_progress(e.position().x()))
+        x = e.position().x()
+        handle = self._near_handle(x)
+        if handle or (self._loop_start >= 0 and self._loop_end >= 0):
+            self.setCursor(Qt.CursorShape.SizeHorCursor if handle
+                           else Qt.CursorShape.CrossCursor)
+        else:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        if self._drag_mode == "seek":
+            self.seeked.emit(self._frac(x))
+        elif self._drag_mode == "handle_start":
+            f = min(self._frac(x), self._loop_end - 0.001)
+            self._loop_start = f
+            self.handle_moved.emit("start", f)
+            self.update()
+        elif self._drag_mode == "handle_end":
+            f = max(self._frac(x), self._loop_start + 0.001)
+            self._loop_end = f
+            self.handle_moved.emit("end", f)
+            self.update()
+        elif self._drag_mode == "loop_new":
+            cur = self._frac(x)
+            self._loop_preview_start = min(self._drag_origin, cur)
+            self._loop_preview_end   = max(self._drag_origin, cur)
+            self.update()
+
+    def mousePressEvent(self, e):
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        x = e.position().x()
+        handle = self._near_handle(x)
+        if handle == "start":
+            self._drag_mode = "handle_start"
+        elif handle == "end":
+            self._drag_mode = "handle_end"
+        elif e.modifiers() & Qt.KeyboardModifier.ShiftModifier or \
+             (self._loop_start < 0):
+            # Shift+drag or no loop yet → always create new loop via drag
+            self._drag_mode = "loop_new"
+            self._drag_origin = self._frac(x)
+            self._loop_preview_start = self._loop_preview_end = self._drag_origin
+        else:
+            self._drag_mode = "seek"
+            self.seeked.emit(self._frac(x))
 
     def mouseReleaseEvent(self, e):
-        self._dragging = False
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        if self._drag_mode == "loop_new":
+            s = self._loop_preview_start
+            end = self._loop_preview_end
+            if end - s > 0.005:
+                self._loop_start = s
+                self._loop_end   = end
+                self.loop_set.emit(s, end)
+            self._loop_preview_start = self._loop_preview_end = -1.0
+            self.update()
+        self._drag_mode = ""
 
 
 # ---------------------------------------------------------------------------
