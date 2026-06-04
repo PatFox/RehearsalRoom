@@ -81,6 +81,8 @@ _LOOP_BORDER = QColor(46, 107, 255, 160)  # border / handle colour
 _ZOOM_MIN    = 1.0
 _ZOOM_MAX    = 32.0
 _ZOOM_STEP   = 1.3   # multiplier per wheel click
+_BAR_W       = 2.0   # fixed screen px per bar (constant at all zoom levels)
+_BAR_GAP     = 0.8   # gap between bars
 
 
 class WaveformWidget(QWidget):
@@ -160,12 +162,30 @@ class WaveformWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
 
-        scroll_px = self._scroll_px()
-        total_w   = self._total_w()
-        n = len(self._data)
-        bw_total = total_w / n          # bucket width in zoomed space
-        bar_w    = max(1.0, bw_total - 1.4)
         mid, max_bar = h / 2, h * 0.42
+
+        # --- visible window in song-fraction space ---
+        vis_frac   = 1.0 / max(self._zoom, 1e-9)
+        start_frac = self._scroll_frac * (1.0 - vis_frac)
+
+        # Slice the high-res data to the visible portion
+        n_total    = len(self._data)
+        start_idx  = int(start_frac * n_total)
+        end_idx    = min(n_total, max(start_idx + 1, int((start_frac + vis_frac) * n_total)))
+        src        = self._data[start_idx:end_idx]
+
+        # How many fixed-width bars fit across the widget?
+        step   = _BAR_W + _BAR_GAP
+        n_bars = max(1, int(w / step))
+        n_src  = len(src)
+
+        # Downsample/resample src → n_bars display buckets (peak per bucket)
+        bars: list[float] = []
+        for i in range(n_bars):
+            s = int(i * n_src / n_bars)
+            e = max(s + 1, int((i + 1) * n_src / n_bars))
+            bars.append(max(src[s:e]))
+
         play_x = self._screen_x(self._progress)
 
         if self._muted:
@@ -175,18 +195,14 @@ class WaveformWidget(QWidget):
         else:
             col = QColor(self._color)
 
-        for i, amp_norm in enumerate(self._data):
-            x = i * bw_total - scroll_px
-            if x > w + bw_total:
-                break
-            if x + bw_total < 0:
-                continue
+        for i, amp_norm in enumerate(bars):
+            x   = i * step
             amp = amp_norm * max_bar
             if self._muted:
                 col.setAlphaF(0.22)
             else:
                 col.setAlphaF(1.0 if x < play_x else 0.28)
-            painter.fillRect(QRectF(x, mid - amp, bar_w, amp * 2), col)
+            painter.fillRect(QRectF(x, mid - amp, _BAR_W, amp * 2), col)
 
         # --- loop region ---
         ls, le = self._loop_start, self._loop_end
@@ -268,7 +284,9 @@ class WaveformWidget(QWidget):
         if e.button() == Qt.MouseButton.RightButton:
             if self._drag_mode == "loop_new":
                 s, end = self._loop_preview_start, self._loop_preview_end
-                if end - s > 0.005:
+                # Require at least 4 screen pixels — works at any zoom level or song length
+                min_frac = 4.0 / max(1, self.width() * self._zoom)
+                if end - s > min_frac:
                     self._loop_start = s
                     self._loop_end   = end
                     self.loop_set.emit(s, end)

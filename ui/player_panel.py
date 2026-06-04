@@ -44,10 +44,20 @@ class Ruler(QWidget):
 
     GUTTER_W = 244
 
+    # Candidate tick intervals in ms, from coarse to fine
+    _INTERVALS = [
+        300_000, 120_000, 60_000, 30_000, 15_000,
+        10_000, 5_000, 2_000, 1_000, 500
+    ]
+    # Minimum px between ticks before we pick a finer interval
+    _MIN_TICK_PX = 60
+
     def __init__(self, duration_ms: int, theme: Theme, parent=None):
         super().__init__(parent)
         self._dur = max(1, duration_ms)
         self._theme = theme
+        self._zoom: float = 1.0
+        self._scroll_frac: float = 0.0
         self.setFixedHeight(34)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -55,44 +65,84 @@ class Ruler(QWidget):
         self._dur = max(1, ms)
         self.update()
 
+    def set_zoom_scroll(self, zoom: float, scroll_frac: float):
+        self._zoom = max(1.0, zoom)
+        self._scroll_frac = scroll_frac
+        self.update()
+
+    def _visible_range_ms(self) -> tuple[float, float]:
+        """Return (start_ms, end_ms) of the currently visible window."""
+        vis_frac   = 1.0 / self._zoom
+        start_frac = self._scroll_frac * (1.0 - vis_frac)
+        return start_frac * self._dur, (start_frac + vis_frac) * self._dur
+
+    def _ms_to_x(self, ms: float, track_w: int) -> int:
+        """Convert an absolute song-time ms to screen x within the track area."""
+        start_ms, end_ms = self._visible_range_ms()
+        span = max(1.0, end_ms - start_ms)
+        return self.GUTTER_W + int((ms - start_ms) / span * track_w)
+
+    def _pick_interval(self, track_w: int) -> int:
+        """Choose the finest tick interval where ticks are still at least _MIN_TICK_PX apart."""
+        start_ms, end_ms = self._visible_range_ms()
+        visible_ms = max(1.0, end_ms - start_ms)
+        # Iterate finest → coarsest; return the first (finest) that has enough spacing
+        chosen = self._INTERVALS[0]  # coarsest fallback
+        for iv in reversed(self._INTERVALS):
+            px_per_tick = iv / visible_ms * track_w
+            if px_per_tick >= self._MIN_TICK_PX:
+                chosen = iv
+                break
+        return chosen
+
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         w, h = self.width(), self.height()
         gw = self.GUTTER_W
+        track_w = w - gw
 
-        # gutter bg
+        # backgrounds
         p.fillRect(0, 0, gw, h, QColor(self._theme.surface))
-        p.fillRect(gw, 0, w - gw, h, QColor(self._theme.surface))
+        p.fillRect(gw, 0, track_w, h, QColor(self._theme.surface))
 
         # gutter label
         p.setPen(QColor(self._theme.ink3))
         f = p.font(); f.setPointSize(8); f.setBold(True); p.setFont(f)
         p.drawText(16, 0, gw - 16, h, Qt.AlignmentFlag.AlignVCenter, "STEMS")
 
-        # gutter right border
+        # borders
         p.setPen(QColor(self._theme.border))
         p.drawLine(gw, 0, gw, h)
-
-        # bottom border
         p.drawLine(0, h - 1, w, h - 1)
 
-        # time ticks every 30 s
-        track_w = w - gw
-        interval = 30_000
-        t = interval
-        while t <= self._dur:
-            x = gw + int(t / self._dur * track_w)
-            p.setPen(QColor(self._theme.border))
-            p.drawLine(x, 0, x, h)
-            p.setPen(QColor(self._theme.ink3))
-            f2 = p.font(); f2.setPointSize(8); f2.setFamily("Consolas"); p.setFont(f2)
-            p.drawText(x + 5, 8, 60, 18, 0, _fmt_clock(t))
+        # time ticks at adaptive interval
+        start_ms, end_ms = self._visible_range_ms()
+        interval = self._pick_interval(track_w)
+
+        # Start from the first tick >= start_ms
+        first_tick = int(start_ms / interval + 1) * interval
+        t = first_tick
+        f2 = p.font(); f2.setPointSize(8); f2.setFamily("Consolas"); f2.setBold(False)
+        p.setFont(f2)
+        while t <= min(end_ms, self._dur):
+            x = self._ms_to_x(t, track_w)
+            if gw < x < w:
+                p.setPen(QColor(self._theme.border))
+                p.drawLine(x, 0, x, h)
+                p.setPen(QColor(self._theme.ink3))
+                p.drawText(x + 4, 8, 70, 18, 0, _fmt_clock(t))
             t += interval
+
         p.end()
 
     def _to_progress(self, x: int) -> float:
-        return max(0.0, min(1.0, (x - self.GUTTER_W) / max(1, self.width() - self.GUTTER_W)))
+        """Screen x → song fraction, accounting for zoom/scroll."""
+        track_w = max(1, self.width() - self.GUTTER_W)
+        start_ms, end_ms = self._visible_range_ms()
+        frac_in_view = (x - self.GUTTER_W) / track_w
+        ms = start_ms + frac_in_view * (end_ms - start_ms)
+        return max(0.0, min(1.0, ms / self._dur))
 
     def mousePressEvent(self, e):
         if e.position().x() > self.GUTTER_W:
@@ -855,12 +905,13 @@ class PlayerPanel(QWidget):
         self._zoom = 1.0
         self._scroll_frac = 0.0
         self._auto_center = False
+        self._ruler.set_zoom_scroll(1.0, 0.0)
 
         # Use real waveform data from player if available, else procedural fallback
         waveforms = {}
         if player is not None:
             for sid in STEM_IDS:
-                waveforms[sid] = player.waveform_data(sid, 320)
+                waveforms[sid] = player.waveform_data(sid, 4000)
 
         self._rebuild_lanes(song, waveforms)
 
@@ -876,7 +927,7 @@ class PlayerPanel(QWidget):
 
         for sid, slbl, col in zip(STEM_IDS, STEM_LABELS, colors):
             # Real waveform data if available, else procedural fallback
-            wdata = (waveforms or {}).get(sid) or gen_waveform(seed, sid, 320)
+            wdata = (waveforms or {}).get(sid) or gen_waveform(seed, sid, 4000)
             lane = StemLane(sid, slbl, col, wdata, self._theme)
             lane.mute_toggled.connect(self._on_mute)
             lane.solo_toggled.connect(self._on_solo)
@@ -1037,6 +1088,7 @@ class PlayerPanel(QWidget):
         for lane in self._lanes.values():
             lane.set_zoom_scroll(self._zoom, self._scroll_frac)
         self._waveform_scrollbar.set_zoom_scroll(self._zoom, self._scroll_frac)
+        self._ruler.set_zoom_scroll(self._zoom, self._scroll_frac)
 
     def _center_playhead(self):
         """Scroll so the playhead sits in the middle of the visible window."""
