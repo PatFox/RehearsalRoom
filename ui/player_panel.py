@@ -233,6 +233,7 @@ class StemLane(QFrame):
     loop_set            = Signal(float, float)
     handle_moved        = Signal(str, float)
     zoom_scroll_changed = Signal(float, float)   # zoom, scroll_frac
+    loop_cleared        = Signal()
 
     LANE_HEIGHT = 116
 
@@ -303,6 +304,7 @@ class StemLane(QFrame):
         self._wave.loop_set.connect(self.loop_set)
         self._wave.handle_moved.connect(self.handle_moved)
         self._wave.zoom_scroll_changed.connect(self.zoom_scroll_changed)
+        self._wave.loop_cleared.connect(self.loop_cleared)
         lay.addWidget(self._wave, 1)
 
     def set_progress(self, p: float):
@@ -881,6 +883,7 @@ class PlayerPanel(QWidget):
             lane.volume_changed.connect(self._on_volume)
             lane.seek_requested.connect(lambda p: self._seek(p, user_initiated=True))
             lane.loop_set.connect(self._set_loop_from_fracs)
+            lane.loop_cleared.connect(self._clear_loop)
             lane.handle_moved.connect(self._on_handle_moved)
             lane.zoom_scroll_changed.connect(self._on_zoom_scroll)
             self._lanes_lay.insertWidget(self._lanes_lay.count() - 1, lane)

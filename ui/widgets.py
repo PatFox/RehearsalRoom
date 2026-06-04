@@ -84,9 +84,10 @@ _ZOOM_STEP   = 1.3   # multiplier per wheel click
 
 
 class WaveformWidget(QWidget):
-    seeked             = Signal(float)        # fraction 0-1
-    loop_set           = Signal(float, float) # start_frac, end_frac
-    handle_moved       = Signal(str, float)   # "start"|"end", new_frac
+    seeked              = Signal(float)        # fraction 0-1
+    loop_set            = Signal(float, float) # start_frac, end_frac
+    loop_cleared        = Signal()            # user started a new drag — clear old loop
+    handle_moved        = Signal(str, float)   # "start"|"end", new_frac
     zoom_scroll_changed = Signal(float, float) # zoom, scroll_frac (broadcast to siblings)
 
     def __init__(self, parent=None):
@@ -216,6 +217,7 @@ class WaveformWidget(QWidget):
     def mouseMoveEvent(self, e):
         x = e.position().x()
         handle = self._near_handle(x)
+        # Cursor hint: show resize cursor near handles, crosshair elsewhere over waveform
         if handle:
             self.setCursor(Qt.CursorShape.SizeHorCursor)
         elif self._loop_start >= 0 and self._loop_end >= 0:
@@ -235,41 +237,50 @@ class WaveformWidget(QWidget):
             self._loop_end = f
             self.handle_moved.emit("end", f)
             self.update()
-        elif self._drag_mode == "loop_new":
+        elif self._drag_mode == "loop_new" and e.buttons() & Qt.MouseButton.RightButton:
             cur = self._frac(x)
             self._loop_preview_start = min(self._drag_origin, cur)
             self._loop_preview_end   = max(self._drag_origin, cur)
             self.update()
 
     def mousePressEvent(self, e):
-        if e.button() != Qt.MouseButton.LeftButton:
-            return
         x = e.position().x()
-        handle = self._near_handle(x)
-        if handle == "start":
-            self._drag_mode = "handle_start"
-        elif handle == "end":
-            self._drag_mode = "handle_end"
-        elif e.modifiers() & Qt.KeyboardModifier.ShiftModifier or self._loop_start < 0:
-            self._drag_mode = "loop_new"
-            self._drag_origin = self._frac(x)
-            self._loop_preview_start = self._loop_preview_end = self._drag_origin
-        else:
+        if e.button() == Qt.MouseButton.RightButton:
+            # Right button: set/drag loop region or move handles
+            handle = self._near_handle(x)
+            if handle == "start":
+                self._drag_mode = "handle_start"
+            elif handle == "end":
+                self._drag_mode = "handle_end"
+            else:
+                self._drag_mode = "loop_new"
+                self._drag_origin = self._frac(x)
+                self._loop_preview_start = self._loop_preview_end = self._drag_origin
+                # Clear committed loop immediately so old overlay doesn't show during drag
+                self._loop_start = -1.0
+                self._loop_end   = -1.0
+                self.loop_cleared.emit()
+        elif e.button() == Qt.MouseButton.LeftButton:
             self._drag_mode = "seek"
             self.seeked.emit(self._frac(x))
 
     def mouseReleaseEvent(self, e):
-        if e.button() != Qt.MouseButton.LeftButton:
-            return
-        if self._drag_mode == "loop_new":
-            s, end = self._loop_preview_start, self._loop_preview_end
-            if end - s > 0.005:
-                self._loop_start = s
-                self._loop_end   = end
-                self.loop_set.emit(s, end)
-            self._loop_preview_start = self._loop_preview_end = -1.0
-            self.update()
-        self._drag_mode = ""
+        if e.button() == Qt.MouseButton.RightButton:
+            if self._drag_mode == "loop_new":
+                s, end = self._loop_preview_start, self._loop_preview_end
+                if end - s > 0.005:
+                    self._loop_start = s
+                    self._loop_end   = end
+                    self.loop_set.emit(s, end)
+                self._loop_preview_start = self._loop_preview_end = -1.0
+                self.update()
+            self._drag_mode = ""
+        elif e.button() == Qt.MouseButton.LeftButton:
+            self._drag_mode = ""
+
+    def contextMenuEvent(self, e):
+        # Suppress the default right-click context menu
+        e.accept()
 
     def wheelEvent(self, e):
         delta = e.angleDelta().y()
