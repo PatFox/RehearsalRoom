@@ -1101,7 +1101,6 @@ class PlayerPanel(QWidget):
             if self._player:
                 self._player.set_mute(sid, not should_be_active)
             if sid in self._lanes:
-                self._lanes[sid].set_muted(not should_be_active)
                 self._lanes[sid].set_audible(should_be_active)
 
         # Seek to loop start and play
