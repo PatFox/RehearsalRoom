@@ -741,7 +741,6 @@ class LoopListPanel(QFrame):
 
     def set_loops(self, loops):
         """Rebuild the list. loops is a list of SavedLoop objects."""
-        from core.project import SavedLoop
         # Remove old rows (keep stretch and empty label)
         while self._list_lay.count() > 2:
             item = self._list_lay.takeAt(0)
@@ -749,6 +748,7 @@ class LoopListPanel(QFrame):
                 item.widget().deleteLater()
 
         self._empty_lbl.setVisible(len(loops) == 0)
+        self.setVisible(len(loops) > 0)
 
         for lp in loops:
             row = self._make_row(lp)
@@ -1144,7 +1144,8 @@ class PlayerPanel(QWidget):
         self._scroll_frac = 0.0
         self._auto_center = False
         self._ruler.set_zoom_scroll(1.0, 0.0)
-        self._loop_list.set_loops(song.get("loops", []))
+        loops = song.get("loops", [])
+        self._loop_list.set_loops(loops)
 
         # Use real waveform data from player if available, else procedural fallback
         waveforms = {}
