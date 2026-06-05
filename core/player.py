@@ -192,15 +192,19 @@ class StemPlayer:
     def waveform_data(self, stem_id: str, n_buckets: int = 320) -> list[float]:
         data = self._stems.get(stem_id)
         if data is None or len(data) == 0:
-            return [0.03] * n_buckets
+            return [0.0] * n_buckets
         mono = data.mean(axis=1)
         spb = len(mono) / n_buckets
         buckets = np.array([
             np.sqrt(np.mean(mono[int(i * spb): max(int(i * spb) + 1, int((i + 1) * spb))] ** 2))
             for i in range(n_buckets)
         ], dtype=np.float32)
-        p98 = float(np.percentile(buckets, 98)) or 1.0
-        return [max(0.03, min(1.0, float(b) / p98)) for b in buckets]
+        p98 = float(np.percentile(buckets, 98))
+        # Noise floor ~-50 dB: if the loudest part of the stem is below this,
+        # it's effectively silent — don't amplify floating-point noise into bars.
+        if p98 < 0.003:
+            return [0.0] * n_buckets
+        return [max(0.0, min(1.0, float(b) / p98)) for b in buckets]
 
     # ------------------------------------------------------------------
     # Tempo — pitch-preserving via ffmpeg atempo, runs in background
