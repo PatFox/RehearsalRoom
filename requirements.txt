@@ -19,8 +19,7 @@ imageio-ffmpeg   # bundles a working static ffmpeg binary, no DLL issues
 mutagen          # reads embedded ID3/Vorbis/MP4 tags from local files
 pyacoustid       # AcoustID fingerprinting + MusicBrainz lookup (needs API key)
 
-# Tempo control (pitch-preserving via phase vocoder)
-librosa
+# (Tempo control uses ffmpeg's built-in rubberband filter — no extra package needed)
 
 # Packaging
 pyinstaller
