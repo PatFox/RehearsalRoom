@@ -14,14 +14,14 @@ from ui.main_window import MainWindow
 
 
 def main():
+    # Must be set before QApplication is created
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
+
     app = QApplication(sys.argv)
     app.setApplicationName("Rehearsal Room")
     app.setApplicationVersion("0.1.0")
-
-    # High-DPI support
-    app.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-    )
 
     # Load bundled fonts if present
     font_dir = os.path.join(os.path.dirname(__file__), "assets", "fonts")

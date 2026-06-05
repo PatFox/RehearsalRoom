@@ -388,12 +388,13 @@ class StemLane(QFrame):
 # ---------------------------------------------------------------------------
 
 class TransportBar(QFrame):
-    play_pause = Signal()
-    stop = Signal()
-    restart = Signal()
-    loop_clicked = Signal()   # cycles through 3 states; PlayerPanel owns the state
+    play_pause     = Signal()
+    stop           = Signal()
+    restart        = Signal()
+    loop_clicked   = Signal()
+    save_loop      = Signal()   # emitted when user clicks the save-loop button
     master_changed = Signal(int)
-    tempo_changed = Signal(float)
+    tempo_changed  = Signal(float)
 
     def __init__(self, duration_ms: int, theme: Theme, parent=None):
         super().__init__(parent)
@@ -438,7 +439,7 @@ class TransportBar(QFrame):
         self._play_btn.setStyleSheet(
             f"QPushButton {{ background: {self._theme.ink}; color: {self._theme.ink_inv}; "
             f"border-radius: 28px; font-size: 18px; }}"
-            f"QPushButton:hover {{ filter: brightness(1.14); }}"
+            f"QPushButton:hover {{ background: {self._theme.ink2}; }}"
         )
         self._play_btn.clicked.connect(self.play_pause)
         ctrl.addWidget(self._play_btn)
@@ -450,6 +451,11 @@ class TransportBar(QFrame):
         self._loop_btn = self._tbtn("⊙", "Click to set loop start (L)")
         self._loop_btn.clicked.connect(self.loop_clicked)
         ctrl.addWidget(self._loop_btn)
+
+        self._save_loop_btn = self._tbtn("💾", "Save current loop")
+        self._save_loop_btn.clicked.connect(self.save_loop)
+        self._save_loop_btn.hide()   # only visible when loop is active
+        ctrl.addWidget(self._save_loop_btn)
 
         lay.addLayout(ctrl)
 
@@ -616,6 +622,7 @@ class TransportBar(QFrame):
             f"font-size: 16px; color: {colours[state]}; }}"
             f"QPushButton:hover {{ background: {self._theme.surface2}; }}"
         )
+        self._save_loop_btn.setVisible(state == 2)
 
     def set_playing(self, playing: bool):
         self._play_btn.setText("⏸" if playing else "▶")
@@ -626,6 +633,165 @@ class TransportBar(QFrame):
     def set_duration(self, ms: int):
         self._duration = ms
         self._total_lbl.setText(f" / {_fmt_ms(ms)}")
+
+
+# ---------------------------------------------------------------------------
+# Save loop dialog
+# ---------------------------------------------------------------------------
+
+class SaveLoopDialog(QDialog):
+    saved = Signal(str)   # chosen name
+
+    def __init__(self, default_name: str, theme: Theme, parent=None):
+        super().__init__(parent)
+        self._theme = theme
+        self.setWindowTitle("Save loop")
+        self.setFixedWidth(380)
+        self.setModal(True)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 18, 22, 20)
+        lay.setSpacing(12)
+
+        title = QLabel("Save loop")
+        title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        lay.addWidget(title)
+
+        lbl = QLabel("Loop name")
+        lbl.setStyleSheet(f"font-size: 12px; color: {theme.ink3};")
+        lay.addWidget(lbl)
+
+        self._input = QLineEdit(default_name)
+        self._input.selectAll()
+        lay.addWidget(self._input)
+
+        foot = QHBoxLayout()
+        foot.addStretch()
+        cancel = QPushButton("Cancel")
+        cancel.setProperty("role", "ghost")
+        cancel.clicked.connect(self.reject)
+        ok = QPushButton("Save")
+        ok.setProperty("role", "primary")
+        ok.clicked.connect(self._on_save)
+        foot.addWidget(cancel)
+        foot.addWidget(ok)
+        lay.addLayout(foot)
+
+        self._input.returnPressed.connect(self._on_save)
+
+    def _on_save(self):
+        name = self._input.text().strip()
+        if name:
+            self.saved.emit(name)
+            self.accept()
+
+
+# ---------------------------------------------------------------------------
+# Loop list panel (right sidebar)
+# ---------------------------------------------------------------------------
+
+class LoopListPanel(QFrame):
+    loop_activated = Signal(object)   # SavedLoop
+    loop_deleted   = Signal(str)      # loop name
+
+    def __init__(self, theme: Theme, parent=None):
+        super().__init__(parent)
+        self._theme = theme
+        self.setFixedWidth(210)
+        self.setStyleSheet(
+            f"QFrame {{ background: {theme.surface}; "
+            f"border-left: 1px solid {theme.border}; }}"
+        )
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        hdr = QWidget()
+        hdr.setFixedHeight(34)
+        hdr.setStyleSheet(f"background: {theme.surface};")
+        hdr_lay = QHBoxLayout(hdr)
+        hdr_lay.setContentsMargins(12, 0, 12, 0)
+        lbl = QLabel("SAVED LOOPS")
+        lbl.setStyleSheet(
+            f"font-size: 9px; font-weight: 700; letter-spacing: 0.1em; color: {theme.ink3};"
+        )
+        hdr_lay.addWidget(lbl)
+        root.addWidget(hdr)
+
+        div = QFrame()
+        div.setFrameShape(QFrame.Shape.HLine)
+        div.setStyleSheet(f"color: {theme.border};")
+        root.addWidget(div)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._container = QWidget()
+        self._container.setStyleSheet(f"background: {theme.surface};")
+        self._list_lay = QVBoxLayout(self._container)
+        self._list_lay.setContentsMargins(0, 4, 0, 4)
+        self._list_lay.setSpacing(0)
+        self._list_lay.addStretch()
+        self._scroll.setWidget(self._container)
+        root.addWidget(self._scroll, 1)
+
+        self._empty_lbl = QLabel("No saved loops")
+        self._empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_lbl.setStyleSheet(f"font-size: 12px; color: {theme.ink3}; padding: 16px;")
+        self._list_lay.insertWidget(0, self._empty_lbl)
+
+    def set_loops(self, loops):
+        """Rebuild the list. loops is a list of SavedLoop objects."""
+        from core.project import SavedLoop
+        # Remove old rows (keep stretch and empty label)
+        while self._list_lay.count() > 2:
+            item = self._list_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        self._empty_lbl.setVisible(len(loops) == 0)
+
+        for lp in loops:
+            row = self._make_row(lp)
+            self._list_lay.insertWidget(self._list_lay.count() - 2, row)
+
+    def _make_row(self, lp) -> QWidget:
+        row = QWidget()
+        row.setStyleSheet(
+            f"QWidget {{ background: transparent; }}"
+            f"QWidget:hover {{ background: {self._theme.surface2}; }}"
+        )
+        row.setCursor(Qt.CursorShape.PointingHandCursor)
+        row.setFixedHeight(52)
+
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(12, 4, 8, 4)
+        lay.setSpacing(4)
+
+        info = QVBoxLayout()
+        info.setSpacing(1)
+        name_lbl = QLabel(lp.name)
+        name_lbl.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {self._theme.ink};")
+        time_lbl = QLabel(f"{_fmt_ms(lp.start_ms)} – {_fmt_ms(lp.end_ms)}")
+        time_lbl.setStyleSheet(
+            f"font-family: Consolas, monospace; font-size: 10px; color: {self._theme.ink3};"
+        )
+        info.addWidget(name_lbl)
+        info.addWidget(time_lbl)
+        lay.addLayout(info, 1)
+
+        del_btn = QPushButton("✕")
+        del_btn.setFixedSize(22, 22)
+        del_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border-radius: 11px; "
+            f"font-size: 11px; color: {self._theme.ink3}; border: none; }}"
+            f"QPushButton:hover {{ background: {self._theme.surface3}; color: {self._theme.ink}; }}"
+        )
+        del_btn.clicked.connect(lambda: self.loop_deleted.emit(lp.name))
+        lay.addWidget(del_btn)
+
+        # Click anywhere on the row (except delete) to activate
+        row.mousePressEvent = lambda e, _lp=lp: self.loop_activated.emit(_lp)
+        return row
 
 
 # ---------------------------------------------------------------------------
@@ -731,9 +897,11 @@ class MetaDialog(QDialog):
 # ---------------------------------------------------------------------------
 
 class PlayerPanel(QWidget):
-    back_clicked = Signal()
-    export_clicked = Signal(dict)    # song dict
-    save_metadata = Signal(dict)     # updated metadata
+    back_clicked  = Signal()
+    export_clicked = Signal(dict)
+    save_metadata  = Signal(dict)
+    loop_save_requested = Signal(object)   # SavedLoop — MainWindow writes to disk
+    loop_delete_requested = Signal(str)    # loop name
 
     def __init__(self, theme: Theme, parent=None):
         super().__init__(parent)
@@ -831,17 +999,22 @@ class PlayerPanel(QWidget):
 
         root.addWidget(self._topbar)
 
-        # timeline (ruler + lanes)
+        # timeline (ruler + lanes) + loop list panel side by side
         self._timeline = QWidget()
-        timeline_lay = QVBoxLayout(self._timeline)
+        timeline_outer = QHBoxLayout(self._timeline)
+        timeline_outer.setContentsMargins(0, 0, 0, 0)
+        timeline_outer.setSpacing(0)
+
+        # left: ruler + lanes + scrollbar
+        lanes_area = QWidget()
+        timeline_lay = QVBoxLayout(lanes_area)
         timeline_lay.setContentsMargins(0, 0, 0, 0)
         timeline_lay.setSpacing(0)
 
         self._ruler = Ruler(1, self._theme)
-        self._ruler.seek_requested.connect(self._seek)
+        self._ruler.seek_requested.connect(lambda p: self._seek(p, user_initiated=True))
         timeline_lay.addWidget(self._ruler)
 
-        # lanes scroll area
         self._lanes_scroll = QScrollArea()
         self._lanes_scroll.setWidgetResizable(True)
         self._lanes_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -853,10 +1026,17 @@ class PlayerPanel(QWidget):
         self._lanes_scroll.setWidget(self._lanes_container)
         timeline_lay.addWidget(self._lanes_scroll, 1)
 
-        # Waveform zoom scrollbar (hidden at 1× zoom)
         self._waveform_scrollbar = WaveformScrollBar(self._theme)
         self._waveform_scrollbar.scrolled.connect(self._on_scrollbar_scrolled)
         timeline_lay.addWidget(self._waveform_scrollbar)
+
+        timeline_outer.addWidget(lanes_area, 1)
+
+        # right: loop list panel
+        self._loop_list = LoopListPanel(self._theme)
+        self._loop_list.loop_activated.connect(self._restore_saved_loop)
+        self._loop_list.loop_deleted.connect(self.loop_delete_requested)
+        timeline_outer.addWidget(self._loop_list)
 
         root.addWidget(self._timeline, 1)
 
@@ -866,9 +1046,68 @@ class PlayerPanel(QWidget):
         self._transport.stop.connect(self._stop)
         self._transport.restart.connect(lambda: self._seek(0.0))
         self._transport.loop_clicked.connect(self._on_loop_button)
+        self._transport.save_loop.connect(self._on_save_loop)
         self._transport.master_changed.connect(self._on_master_changed)
         self._transport.tempo_changed.connect(self._on_tempo_changed)
         root.addWidget(self._transport)
+
+    # ------------------------------------------------------------------
+    # Saved loops
+    # ------------------------------------------------------------------
+
+    def _on_save_loop(self):
+        from core.project import SavedLoop
+        from ui.player_panel import _fmt_ms  # already in scope
+
+        # Build auto-generated name: times + audible stems
+        start_ms = int(self._loop_start_ms)
+        end_ms   = int(self._loop_end_ms)
+        active = [sid for sid in STEM_IDS
+                  if not self._mutes.get(sid, False) and not (
+                      any(self._solos.values()) and not self._solos.get(sid, False))]
+        all_active = len(active) == len(STEM_IDS)
+        stems_part = "" if all_active else " · " + ", ".join(
+            lbl for sid, lbl in zip(STEM_IDS, STEM_LABELS) if sid in active
+        )
+        default_name = f"{_fmt_ms(start_ms)} – {_fmt_ms(end_ms)}{stems_part}"
+
+        dlg = SaveLoopDialog(default_name, self._theme, self)
+        dlg.saved.connect(lambda name: self._commit_save_loop(name, start_ms, end_ms, active))
+        dlg.exec()
+
+    def _commit_save_loop(self, name: str, start_ms: int, end_ms: int, active_stems: list):
+        from core.project import SavedLoop
+        lp = SavedLoop(name=name, start_ms=start_ms, end_ms=end_ms, active_stems=active_stems)
+        self.loop_save_requested.emit(lp)
+
+    def set_loops(self, loops: list):
+        """Called by MainWindow after the manifest is updated on disk."""
+        self._loop_list.set_loops(loops)
+
+    def _restore_saved_loop(self, lp):
+        """Activate a saved loop: set region, restore mute state, start playing."""
+        # Set loop region
+        self._loop_start_ms = float(lp.start_ms)
+        self._loop_end_ms   = float(lp.end_ms)
+        self._loop_state    = 2
+        self._transport.set_loop_state(2)
+        self._update_loop_display()
+
+        # Restore stem audibility
+        for sid in STEM_IDS:
+            should_be_active = sid in lp.active_stems
+            self._mutes[sid] = not should_be_active
+            self._solos[sid] = False
+            if self._player:
+                self._player.set_mute(sid, not should_be_active)
+            if sid in self._lanes:
+                self._lanes[sid].set_muted(not should_be_active)
+                self._lanes[sid].set_audible(should_be_active)
+
+        # Seek to loop start and play
+        self._seek(self._loop_start_ms / max(1, self._duration))
+        if not self._playing:
+            self._toggle_play()
 
     # ------------------------------------------------------------------
     # Public API
@@ -906,6 +1145,7 @@ class PlayerPanel(QWidget):
         self._scroll_frac = 0.0
         self._auto_center = False
         self._ruler.set_zoom_scroll(1.0, 0.0)
+        self._loop_list.set_loops(song.get("loops", []))
 
         # Use real waveform data from player if available, else procedural fallback
         waveforms = {}

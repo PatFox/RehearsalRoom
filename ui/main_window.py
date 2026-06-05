@@ -384,6 +384,8 @@ class MainWindow(QMainWindow):
         self._player.back_clicked.connect(self._go_library)
         self._player.export_clicked.connect(self._on_export)
         self._player.save_metadata.connect(self._on_save_metadata)
+        self._player.loop_save_requested.connect(self._on_loop_save)
+        self._player.loop_delete_requested.connect(self._on_loop_delete)
         self._stack.addWidget(self._player)   # index 1
 
         main_lay.addWidget(self._stack, 1)
@@ -399,6 +401,14 @@ class MainWindow(QMainWindow):
 
     def _open_song(self, song: dict):
         self._current_song = song
+        # Attach loops from manifest if not already present
+        if song.get("stems_path") and "loops" not in song:
+            try:
+                from core.project import read_manifest
+                manifest = read_manifest(Path(song["stems_path"]))
+                song["loops"] = manifest.loops
+            except Exception:
+                song["loops"] = []
         audio_player = None
         stems_path = song.get("stems_path")
         if stems_path:
@@ -589,6 +599,40 @@ class MainWindow(QMainWindow):
 
         except Exception as exc:
             _ErrorDialog(f"Could not save metadata:\n\n{exc}", self).exec()
+
+    # ------------------------------------------------------------------
+    # Loop save / delete
+    # ------------------------------------------------------------------
+
+    def _on_loop_save(self, loop):
+        song = self._current_song
+        if not song or not song.get("stems_path"):
+            return
+        from core.project import read_manifest, update_manifest
+        try:
+            manifest = read_manifest(Path(song["stems_path"]))
+            # Replace if same name exists, otherwise append
+            manifest.loops = [lp for lp in manifest.loops if lp.name != loop.name]
+            manifest.loops.append(loop)
+            update_manifest(Path(song["stems_path"]), manifest)
+            song["loops"] = manifest.loops
+            self._player.set_loops(manifest.loops)
+        except Exception as exc:
+            _ErrorDialog(f"Could not save loop:\n\n{exc}", self).exec()
+
+    def _on_loop_delete(self, name: str):
+        song = self._current_song
+        if not song or not song.get("stems_path"):
+            return
+        from core.project import read_manifest, update_manifest
+        try:
+            manifest = read_manifest(Path(song["stems_path"]))
+            manifest.loops = [lp for lp in manifest.loops if lp.name != name]
+            update_manifest(Path(song["stems_path"]), manifest)
+            song["loops"] = manifest.loops
+            self._player.set_loops(manifest.loops)
+        except Exception as exc:
+            _ErrorDialog(f"Could not delete loop:\n\n{exc}", self).exec()
 
     # ------------------------------------------------------------------
     # Export

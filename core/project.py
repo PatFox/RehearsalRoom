@@ -36,6 +36,31 @@ class StemInfo:
 
 
 @dataclass
+class SavedLoop:
+    name: str
+    start_ms: int
+    end_ms: int
+    active_stems: list[str]   # stem ids that are audible (not muted)
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "start_ms": self.start_ms,
+            "end_ms": self.end_ms,
+            "active_stems": self.active_stems,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SavedLoop":
+        return cls(
+            name=d.get("name", ""),
+            start_ms=int(d.get("start_ms", 0)),
+            end_ms=int(d.get("end_ms", 0)),
+            active_stems=list(d.get("active_stems", [])),
+        )
+
+
+@dataclass
 class StemsManifest:
     version: str = MANIFEST_VERSION
     title: str = ""
@@ -43,14 +68,17 @@ class StemsManifest:
     source_url: str = ""
     duration_ms: int = 0
     stems: list[StemInfo] = field(default_factory=list)
+    loops: list[SavedLoop] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = asdict(self)
+        d["loops"] = [lp.to_dict() for lp in self.loops]
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "StemsManifest":
         stems = [StemInfo(**s) for s in d.get("stems", [])]
+        loops = [SavedLoop.from_dict(lp) for lp in d.get("loops", [])]
         return cls(
             version=d.get("version", MANIFEST_VERSION),
             title=d.get("title", ""),
@@ -58,6 +86,7 @@ class StemsManifest:
             source_url=d.get("source_url", ""),
             duration_ms=d.get("duration_ms", 0),
             stems=stems,
+            loops=loops,
         )
 
 
