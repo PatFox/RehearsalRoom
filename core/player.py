@@ -306,10 +306,9 @@ class StemPlayer:
                         self._fill_pos = end
                         self._tempo    = rate
 
-                # Signal UI that we've produced at least one chunk
+                # Signal UI that the first chunk is ready (hides the spinner)
                 if self.on_stretch_done:
                     self.on_stretch_done()
-                    self.on_stretch_done = None   # fire once per tempo-change
 
     # ─────────────────────────────────────────────── sounddevice callback ───
 

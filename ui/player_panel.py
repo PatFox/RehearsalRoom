@@ -470,8 +470,16 @@ class TransportBar(QFrame):
         speed_row = QHBoxLayout()
         speed_row.setSpacing(4)
 
-        self._speed_down_btn = self._tbtn("−", "Slower (min 0.5×)")
-        self._speed_down_btn.setFixedSize(30, 30)
+        btn_style = (
+            f"QPushButton {{ background: {self._theme.surface2}; border: 1px solid {self._theme.border}; "
+            f"border-radius: 14px; font-size: 16px; font-weight: 600; color: {self._theme.ink}; }}"
+            f"QPushButton:hover {{ background: {self._theme.surface3}; }}"
+            f"QPushButton:disabled {{ color: {self._theme.ink3}; background: {self._theme.surface}; }}"
+        )
+        self._speed_down_btn = QPushButton("−")
+        self._speed_down_btn.setFixedSize(28, 28)
+        self._speed_down_btn.setToolTip("Slower (min 0.5×)")
+        self._speed_down_btn.setStyleSheet(btn_style)
         self._speed_down_btn.clicked.connect(self._speed_down)
 
         self._speed_val_lbl = QLabel("1.0×")
@@ -481,8 +489,11 @@ class TransportBar(QFrame):
         self._speed_val_lbl.setFixedWidth(38)
         self._speed_val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self._speed_up_btn = self._tbtn("+", "Faster (max 1.0×)")
-        self._speed_up_btn.setFixedSize(30, 30)
+        self._speed_up_btn = QPushButton("+")
+        self._speed_up_btn.setFixedSize(28, 28)
+        self._speed_up_btn.setToolTip("Faster (max 1.0×)")
+        self._speed_up_btn.setStyleSheet(btn_style)
+        self._speed_up_btn.setEnabled(False)   # start at 1.0× so + is disabled
         self._speed_up_btn.clicked.connect(self._speed_up)
 
         # Animated processing indicator
@@ -586,8 +597,6 @@ class TransportBar(QFrame):
 
     @Slot()
     def show_speed_busy(self):
-        self._speed_down_btn.setEnabled(False)
-        self._speed_up_btn.setEnabled(False)
         self._spinner_idx = 0
         self._speed_spinner.setText(self._spinner_frames[0])
         self._speed_spinner.show()
@@ -597,9 +606,6 @@ class TransportBar(QFrame):
     def hide_speed_busy(self):
         self._speed_busy_timer.stop()
         self._speed_spinner.hide()
-        rate = getattr(self, '_current_speed', 1.0)
-        self._speed_down_btn.setEnabled(rate > 0.5)
-        self._speed_up_btn.setEnabled(rate < 1.0)
 
     def set_loop_state(self, state: int):
         """0 = no loop, 1 = start set, 2 = loop active."""
