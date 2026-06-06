@@ -81,7 +81,7 @@ class SongRow(QFrame):
 
         # file size
         size_lbl = QLabel(_fmt_size(s.get("file_size", 0)))
-        size_lbl.setStyleSheet(f"font-size: 12px; color: {theme.ink3};")
+        size_lbl.setStyleSheet(f"font-size: 12px; color: {self._theme.ink3};")
         size_lbl.setFixedWidth(60)
         lay.addWidget(size_lbl)
 
