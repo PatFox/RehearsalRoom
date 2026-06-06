@@ -400,6 +400,7 @@ class TransportBar(QFrame):
         super().__init__(parent)
         self._theme = theme
         self._duration = duration_ms
+        self._current_speed = 1.0
         self.setFixedHeight(88)
         self.setStyleSheet(
             f"QFrame {{ background: {theme.surface}; border-top: 1px solid {theme.border}; }}"
@@ -459,7 +460,7 @@ class TransportBar(QFrame):
 
         lay.addLayout(ctrl)
 
-        # --- Speed slider (not in original design — added per plan) ---
+        # --- Speed buttons ---
         speed_group = QVBoxLayout()
         speed_group.setSpacing(3)
         speed_lbl = QLabel("SPEED")
@@ -467,30 +468,22 @@ class TransportBar(QFrame):
             f"font-size: 10px; font-weight: 600; letter-spacing: 0.1em; color: {self._theme.ink3};"
         )
         speed_row = QHBoxLayout()
-        speed_row.setSpacing(6)
-        self._speed_slider = QSlider(Qt.Orientation.Horizontal)
-        self._speed_slider.setRange(50, 200)
-        self._speed_slider.setValue(100)
-        self._speed_slider.setFixedWidth(120)
-        self._speed_slider.setStyleSheet(f"""
-            QSlider::groove:horizontal {{
-                height: 5px; background: {self._theme.surface3}; border-radius: 3px;
-            }}
-            QSlider::handle:horizontal {{
-                width: 15px; height: 15px; background: {self._theme.surface};
-                border: 2px solid {self._theme.border_strong}; border-radius: 8px; margin: -5px 0;
-            }}
-            QSlider::sub-page:horizontal {{
-                background: {self._theme.accent}; border-radius: 3px;
-            }}
-        """)
+        speed_row.setSpacing(4)
+
+        self._speed_down_btn = self._tbtn("−", "Slower (min 0.5×)")
+        self._speed_down_btn.setFixedSize(30, 30)
+        self._speed_down_btn.clicked.connect(self._speed_down)
+
         self._speed_val_lbl = QLabel("1.0×")
         self._speed_val_lbl.setStyleSheet(
-            "font-family: 'Consolas', monospace; font-size: 12px;"
+            "font-family: 'Consolas', monospace; font-size: 13px; font-weight: 600;"
         )
-        self._speed_val_lbl.setFixedWidth(34)
-        self._speed_slider.valueChanged.connect(self._on_speed)
-        self._speed_slider.mouseDoubleClickEvent = lambda e: self._reset_speed()
+        self._speed_val_lbl.setFixedWidth(38)
+        self._speed_val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self._speed_up_btn = self._tbtn("+", "Faster (max 1.0×)")
+        self._speed_up_btn.setFixedSize(30, 30)
+        self._speed_up_btn.clicked.connect(self._speed_up)
 
         # Animated processing indicator
         self._speed_spinner = QLabel()
@@ -498,22 +491,17 @@ class TransportBar(QFrame):
             f"font-size: 12px; color: {self._theme.accent}; font-family: monospace;"
         )
         self._speed_spinner.setFixedWidth(14)
-        self._speed_spinner_lbl = QLabel("applying…")
-        self._speed_spinner_lbl.setStyleSheet(
-            f"font-size: 11px; color: {self._theme.ink3}; font-style: italic;"
-        )
         self._speed_busy_timer = QTimer()
         self._speed_busy_timer.setInterval(80)
         self._speed_busy_timer.timeout.connect(self._tick_spinner)
         self._spinner_frames = "⣾⣽⣻⢿⡿⣟⣯⣷"
         self._spinner_idx = 0
         self._speed_spinner.hide()
-        self._speed_spinner_lbl.hide()
 
-        speed_row.addWidget(self._speed_slider)
+        speed_row.addWidget(self._speed_down_btn)
         speed_row.addWidget(self._speed_val_lbl)
+        speed_row.addWidget(self._speed_up_btn)
         speed_row.addWidget(self._speed_spinner)
-        speed_row.addWidget(self._speed_spinner_lbl)
         speed_group.addWidget(speed_lbl)
         speed_group.addLayout(speed_row)
         lay.addLayout(speed_group)
@@ -571,13 +559,19 @@ class TransportBar(QFrame):
         )
         return btn
 
-    def _on_speed(self, v: int):
-        rate = v / 100.0
-        self._speed_val_lbl.setText(f"{rate:.1f}×")
-        self.tempo_changed.emit(rate)
+    def _speed_down(self):
+        self._set_speed(round(self._current_speed - 0.1, 1))
 
-    def _reset_speed(self):
-        self._speed_slider.setValue(100)
+    def _speed_up(self):
+        self._set_speed(round(self._current_speed + 0.1, 1))
+
+    def _set_speed(self, rate: float):
+        rate = max(0.5, min(1.0, round(rate, 1)))
+        self._current_speed = rate
+        self._speed_val_lbl.setText(f"{rate:.1f}×")
+        self._speed_down_btn.setEnabled(rate > 0.5)
+        self._speed_up_btn.setEnabled(rate < 1.0)
+        self.tempo_changed.emit(rate)
 
     def _tick_spinner(self):
         self._spinner_idx = (self._spinner_idx + 1) % len(self._spinner_frames)
@@ -592,19 +586,20 @@ class TransportBar(QFrame):
 
     @Slot()
     def show_speed_busy(self):
-        self._speed_slider.setEnabled(False)
+        self._speed_down_btn.setEnabled(False)
+        self._speed_up_btn.setEnabled(False)
         self._spinner_idx = 0
         self._speed_spinner.setText(self._spinner_frames[0])
         self._speed_spinner.show()
-        self._speed_spinner_lbl.show()
         self._speed_busy_timer.start()
 
     @Slot()
     def hide_speed_busy(self):
         self._speed_busy_timer.stop()
         self._speed_spinner.hide()
-        self._speed_spinner_lbl.hide()
-        self._speed_slider.setEnabled(True)
+        rate = getattr(self, '_current_speed', 1.0)
+        self._speed_down_btn.setEnabled(rate > 0.5)
+        self._speed_up_btn.setEnabled(rate < 1.0)
 
     def set_loop_state(self, state: int):
         """0 = no loop, 1 = start set, 2 = loop active."""
