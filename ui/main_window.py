@@ -210,21 +210,12 @@ class Sidebar(QFrame):
         )
         stor_lay = QVBoxLayout(storage)
         stor_lay.setContentsMargins(11, 10, 11, 10)
-        stor_lay.setSpacing(5)
+        stor_lay.setSpacing(3)
         stor_top = QLabel("Library storage")
         stor_top.setStyleSheet("font-size: 11px; font-weight: 500;")
-        # progress bar visual
-        bar_bg = QFrame()
-        bar_bg.setFixedHeight(5)
-        bar_bg.setStyleSheet("background: #ECECE6; border-radius: 3px;")
-        bar_fill = QFrame(bar_bg)
-        bar_fill.setFixedHeight(5)
-        bar_fill.setFixedWidth(int(0.34 * 210))
-        bar_fill.setStyleSheet("background: #56565F; border-radius: 3px;")
-        self._stor_lbl = QLabel(f"2.1 GB of 6 GB · {song_count} tracks")
+        self._stor_lbl = QLabel("")
         self._stor_lbl.setStyleSheet("font-size: 11px; color: #93939C;")
         stor_lay.addWidget(stor_top)
-        stor_lay.addWidget(bar_bg)
         stor_lay.addWidget(self._stor_lbl)
         lay.addWidget(storage)
 
@@ -235,7 +226,11 @@ class Sidebar(QFrame):
 
     def update_count(self, n: int):
         self._nav_buttons["library"].set_count(n)
-        self._stor_lbl.setText(f"2.1 GB of 6 GB · {n} tracks")
+
+    def refresh_storage(self, library_path, n_tracks: int):
+        from core.library_stats import library_total_bytes, fmt_size
+        total = library_total_bytes(library_path)
+        self._stor_lbl.setText(f"{fmt_size(total)} · {n_tracks} track{'s' if n_tracks != 1 else ''}")
 
     def _apply_theme(self):
         t = self._theme
@@ -526,7 +521,7 @@ class MainWindow(QMainWindow):
         self._songs = [s for s in self._songs if s.get("stems_path") != str(out_path)]
         self._songs.insert(0, new_song)
         self._library.set_songs(self._songs)
-        self._sidebar.update_count(len(self._songs))
+        self._refresh_counts()
 
         self._proc_dlg.on_finished()
         self._proc_dlg.completed.connect(lambda: self._open_song(new_song))
@@ -552,7 +547,12 @@ class MainWindow(QMainWindow):
     def _load_library(self):
         self._songs = scan_library()
         self._library.set_songs(self._songs)
-        self._sidebar.update_count(len(self._songs))
+        self._refresh_counts()
+
+    def _refresh_counts(self):
+        n = len(self._songs)
+        self._sidebar.update_count(n)
+        self._sidebar.refresh_storage(S.library_path(), n)
 
     def _open_settings(self):
         dlg = SettingsDialog(self._theme, self)
@@ -617,6 +617,7 @@ class MainWindow(QMainWindow):
             update_manifest(Path(song["stems_path"]), manifest)
             song["loops"] = manifest.loops
             self._player.set_loops(manifest.loops)
+            self._refresh_counts()
         except Exception as exc:
             _ErrorDialog(f"Could not save loop:\n\n{exc}", self).exec()
 
@@ -631,6 +632,7 @@ class MainWindow(QMainWindow):
             update_manifest(Path(song["stems_path"]), manifest)
             song["loops"] = manifest.loops
             self._player.set_loops(manifest.loops)
+            self._refresh_counts()
         except Exception as exc:
             _ErrorDialog(f"Could not delete loop:\n\n{exc}", self).exec()
 

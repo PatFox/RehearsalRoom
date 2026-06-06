@@ -974,12 +974,13 @@ class PlayerPanel(QWidget):
         # readout chips
         chips_row = QHBoxLayout()
         chips_row.setSpacing(16)
-        for key, label_text in [("stems", "Stems"), ("model", "Model")]:
+        for key, label_text in [("stems", "Stems"), ("model", "Model"), ("filesize", "Size")]:
             col = QVBoxLayout()
             col.setSpacing(1)
             k_lbl = QLabel(label_text.upper())
             k_lbl.setStyleSheet(f"font-size: 10px; font-weight: 600; letter-spacing: 0.1em; color: {self._theme.ink3};")
-            v_lbl = QLabel("4" if key == "stems" else "htdemucs")
+            defaults = {"stems": "4", "model": "htdemucs", "filesize": "—"}
+            v_lbl = QLabel(defaults[key])
             v_lbl.setStyleSheet("font-family: 'Consolas', monospace; font-size: 13px;")
             col.addWidget(k_lbl)
             col.addWidget(v_lbl)
@@ -1138,6 +1139,11 @@ class PlayerPanel(QWidget):
         self._title_lbl.setText(song.get("title", ""))
         self._artist_lbl.setText(song.get("artist", ""))
         self._art.update_song(song["grad"][0], song["grad"][1], song.get("seed", 1))
+
+        # File size chip
+        from core.library_stats import fmt_size as _fmt_size
+        file_size = song.get("file_size", 0)
+        self._filesize_val_lbl.setText(_fmt_size(file_size) if file_size else "—")
 
         self._ruler.set_duration(self._duration)
         self._transport.set_duration(self._duration)

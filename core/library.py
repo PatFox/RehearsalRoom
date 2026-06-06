@@ -40,6 +40,7 @@ def song_from_stems_file(stems_path: Path) -> dict | None:
         seed = abs(hash(manifest.title or stems_path.stem)) % 9000 + 1000
         grad = _GRAD_PALETTE[seed % len(_GRAD_PALETTE)]
         mtime = stems_path.stat().st_mtime
+        file_size = stems_path.stat().st_size
         return {
             "id": str(stems_path),
             "title": manifest.title or stems_path.stem,
@@ -50,6 +51,7 @@ def song_from_stems_file(stems_path: Path) -> dict | None:
             "source": manifest.source_url and "youtube" or "file",
             "grad": grad,
             "stems_path": str(stems_path),
+            "file_size": file_size,
             "_mtime": mtime,
         }
     except Exception:

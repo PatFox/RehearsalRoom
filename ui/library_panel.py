@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QFrame, QLineEdit, QSizePolicy
 )
 
+from core.library_stats import fmt_size as _fmt_size
 from ui.theme import Theme, STEM_IDS
 from ui.widgets import ArtThumbnail
 
@@ -75,13 +76,19 @@ class SongRow(QFrame):
         dur_str = f"{secs // 60}:{secs % 60:02d}"
         dur_lbl = QLabel(dur_str)
         dur_lbl.setStyleSheet("font-family: 'Consolas', monospace; font-size: 13px;")
-        dur_lbl.setFixedWidth(60)
+        dur_lbl.setFixedWidth(48)
         lay.addWidget(dur_lbl)
+
+        # file size
+        size_lbl = QLabel(_fmt_size(s.get("file_size", 0)))
+        size_lbl.setStyleSheet(f"font-size: 12px; color: {theme.ink3};")
+        size_lbl.setFixedWidth(60)
+        lay.addWidget(size_lbl)
 
         # added
         added_lbl = QLabel(s.get("addedLabel", ""))
         added_lbl.setStyleSheet("font-size: 12px;")
-        added_lbl.setFixedWidth(100)
+        added_lbl.setFixedWidth(88)
         lay.addWidget(added_lbl)
 
     def apply_theme(self, theme: Theme):
