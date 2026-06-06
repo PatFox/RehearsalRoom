@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import subprocess
 import zipfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -9,6 +10,33 @@ from typing import Optional
 
 import soundfile as sf
 import numpy as np
+
+
+def _ffmpeg() -> str:
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        import shutil as _sh
+        return _sh.which("ffmpeg") or "ffmpeg"
+
+
+def _encode_opus(wav_path: Path, opus_path: Path, bitrate: str = "128k") -> None:
+    """Encode a WAV file to Opus using ffmpeg."""
+    subprocess.run(
+        [_ffmpeg(), "-y", "-i", str(wav_path),
+         "-c:a", "libopus", "-b:a", bitrate, str(opus_path)],
+        check=True, capture_output=True,
+    )
+
+
+def _decode_to_wav(src_path: Path, wav_path: Path) -> None:
+    """Decode any ffmpeg-readable audio file to WAV (for soundfile compatibility)."""
+    subprocess.run(
+        [_ffmpeg(), "-y", "-i", str(src_path),
+         "-ac", "2", "-ar", "44100", str(wav_path)],
+        check=True, capture_output=True,
+    )
 
 
 MANIFEST_VERSION = "1"
@@ -93,7 +121,7 @@ class StemsManifest:
 @dataclass
 class StemsProject:
     manifest: StemsManifest
-    stem_paths: dict[str, Path]  # stem_id -> path to extracted FLAC on disk
+    stem_paths: dict[str, Path]  # stem_id -> path to decoded WAV (or FLAC for legacy)
     source_path: Optional[Path] = None  # path to the .stems file
 
 
@@ -105,12 +133,12 @@ def save_stems(
     source_url: str = "",
     stem_labels: Optional[dict[str, str]] = None,
 ) -> StemsProject:
-    """Convert WAV stem files to FLAC and pack into a .stems ZIP archive."""
+    """Encode WAV stem files to Opus and pack into a .stems ZIP archive."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     stem_infos: list[StemInfo] = []
-    flac_paths: dict[str, Path] = {}
+    opus_paths: dict[str, Path] = {}
     duration_ms = 0
 
     tmp_dir = output_path.parent / (output_path.stem + "_tmp")
@@ -118,16 +146,18 @@ def save_stems(
 
     try:
         for stem_id, wav_path in wav_paths.items():
-            flac_path = tmp_dir / f"{stem_id}.flac"
+            # Read WAV to get duration
             data, samplerate = sf.read(str(wav_path))
-            sf.write(str(flac_path), data, samplerate, format="FLAC")
-            flac_paths[stem_id] = flac_path
-
             if duration_ms == 0:
                 duration_ms = int(len(data) / samplerate * 1000)
 
+            # Encode to Opus via ffmpeg
+            opus_path = tmp_dir / f"{stem_id}.opus"
+            _encode_opus(Path(wav_path), opus_path)
+            opus_paths[stem_id] = opus_path
+
             label = (stem_labels or {}).get(stem_id, stem_id.capitalize())
-            stem_infos.append(StemInfo(id=stem_id, file=f"{stem_id}.flac", label=label))
+            stem_infos.append(StemInfo(id=stem_id, file=f"{stem_id}.opus", label=label))
 
         manifest = StemsManifest(
             title=title,
@@ -139,16 +169,20 @@ def save_stems(
 
         with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_STORED) as zf:
             zf.writestr("manifest.json", json.dumps(manifest.to_dict(), indent=2))
-            for stem_id, flac_path in flac_paths.items():
-                zf.write(flac_path, f"{stem_id}.flac")
+            for stem_id, opus_path in opus_paths.items():
+                zf.write(opus_path, f"{stem_id}.opus")
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    return StemsProject(manifest=manifest, stem_paths=flac_paths, source_path=output_path)
+    return StemsProject(manifest=manifest, stem_paths=opus_paths, source_path=output_path)
 
 
 def load_stems(stems_path: Path, extract_dir: Optional[Path] = None) -> StemsProject:
-    """Extract a .stems file and return a StemsProject with paths to the FLAC files."""
+    """Extract a .stems file and return a StemsProject with paths to WAV files.
+
+    Opus (and any other format soundfile can't read natively) is decoded to WAV
+    via ffmpeg. FLAC files from older .stems files are returned as-is.
+    """
     stems_path = Path(stems_path)
     if extract_dir is None:
         import tempfile
@@ -164,7 +198,18 @@ def load_stems(stems_path: Path, extract_dir: Optional[Path] = None) -> StemsPro
     with open(manifest_path, encoding="utf-8") as f:
         manifest = StemsManifest.from_dict(json.load(f))
 
-    stem_paths = {s.id: extract_dir / s.file for s in manifest.stems}
+    # Soundfile can read WAV and FLAC natively; Opus needs decoding via ffmpeg.
+    _SF_NATIVE = {".wav", ".flac", ".ogg", ".aiff", ".aif"}
+    stem_paths: dict[str, Path] = {}
+    for s in manifest.stems:
+        src = extract_dir / s.file
+        if src.suffix.lower() not in _SF_NATIVE:
+            wav = src.with_suffix(".wav")
+            _decode_to_wav(src, wav)
+            stem_paths[s.id] = wav
+        else:
+            stem_paths[s.id] = src
+
     return StemsProject(manifest=manifest, stem_paths=stem_paths, source_path=stems_path)
 
 
