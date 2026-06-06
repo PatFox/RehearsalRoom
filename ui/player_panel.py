@@ -488,6 +488,9 @@ class TransportBar(QFrame):
         )
         self._speed_val_lbl.setFixedWidth(38)
         self._speed_val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._speed_val_lbl.setToolTip("Double-click to reset to 1.0×")
+        self._speed_val_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._speed_val_lbl.mouseDoubleClickEvent = lambda e: self._set_speed(1.0)
 
         self._speed_up_btn = QPushButton("+")
         self._speed_up_btn.setFixedSize(28, 28)
