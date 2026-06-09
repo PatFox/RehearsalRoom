@@ -1,0 +1,81 @@
+name: Build macOS Release
+
+# Triggers whenever release.bat pushes a version tag (e.g. v1.0.0)
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # ── Python ────────────────────────────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # ── Dependencies ──────────────────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install \
+            PySide6 \
+            numpy \
+            demucs \
+            torch torchaudio \
+            soundfile sounddevice \
+            yt-dlp imageio-ffmpeg \
+            mutagen pyacoustid \
+            pyinstaller
+
+      # ── Build .app bundle ─────────────────────────────────────────────
+      - name: Build with PyInstaller
+        run: pyinstaller installer/rehearsalroom_mac.spec
+
+      # ── Package as DMG ────────────────────────────────────────────────
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Create DMG
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"   # strip leading 'v'
+          mkdir -p dist/dmg
+          cp -r "dist/RehearsalRoom.app" dist/dmg/
+          create-dmg \
+            --volname "Rehearsal Room" \
+            --volicon "assets/icons/app.icns" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 128 \
+            --icon "RehearsalRoom.app" 175 190 \
+            --hide-extension "RehearsalRoom.app" \
+            --app-drop-link 425 190 \
+            "dist/RehearsalRoom-v${VERSION}-mac.dmg" \
+            "dist/dmg/" \
+          || true   # create-dmg exits 1 even on success if no signing identity
+          # Fallback: plain hdiutil if create-dmg produced nothing
+          if [ ! -f "dist/RehearsalRoom-v${VERSION}-mac.dmg" ]; then
+            hdiutil create \
+              -volname "Rehearsal Room" \
+              -srcfolder dist/dmg \
+              -ov -format UDZO \
+              "dist/RehearsalRoom-v${VERSION}-mac.dmg"
+          fi
+
+      # ── Upload to the GitHub Release ──────────────────────────────────
+      - name: Upload DMG to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/RehearsalRoom-v*-mac.dmg
+          # The release was already created by release.bat on Windows;
+          # this step just attaches the Mac DMG to it.
+          fail_on_unmatched_files: true
