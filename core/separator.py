@@ -5,6 +5,7 @@ backend selection issues in newer versions (2.5+).
 """
 
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -29,9 +30,10 @@ def _ensure_wav(path: Path) -> Path:
         ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
 
     out = Path(tempfile.mktemp(suffix=".wav", prefix="rehearsalroom_"))
+    no_window = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
     subprocess.run(
         [str(ffmpeg), "-y", "-i", str(path), "-ac", "2", "-ar", "44100", str(out)],
-        check=True, capture_output=True,
+        check=True, capture_output=True, **no_window,
     )
     return out
 

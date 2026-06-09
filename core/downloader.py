@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -96,9 +97,10 @@ class DownloaderWorker(QThread):
             self.progress.emit(16, "Converting to WAV…")
 
             wav_path = os.path.join(self.output_dir, "audio.wav")
+            no_window = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
             result = subprocess.run(
                 [ffmpeg_exe, "-y", "-i", raw_path, "-ac", "2", "-ar", "44100", wav_path],
-                capture_output=True, text=True,
+                capture_output=True, text=True, **no_window,
             )
             if result.returncode != 0:
                 self.error.emit(f"ffmpeg conversion failed:\n{result.stderr[-800:]}")

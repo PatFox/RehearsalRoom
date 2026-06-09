@@ -3,6 +3,7 @@
 import json
 import shutil
 import subprocess
+import sys
 import zipfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -21,12 +22,20 @@ def _ffmpeg() -> str:
         return _sh.which("ffmpeg") or "ffmpeg"
 
 
+def _subprocess_kwargs() -> dict:
+    """Extra kwargs for subprocess.run to suppress console windows on Windows."""
+    kwargs: dict = {"capture_output": True}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    return kwargs
+
+
 def _encode_opus(wav_path: Path, opus_path: Path, bitrate: str = "128k") -> None:
     """Encode a WAV file to Opus using ffmpeg."""
     subprocess.run(
         [_ffmpeg(), "-y", "-i", str(wav_path),
          "-c:a", "libopus", "-b:a", bitrate, str(opus_path)],
-        check=True, capture_output=True,
+        check=True, **_subprocess_kwargs(),
     )
 
 
@@ -35,7 +44,7 @@ def _decode_to_wav(src_path: Path, wav_path: Path) -> None:
     subprocess.run(
         [_ffmpeg(), "-y", "-i", str(src_path),
          "-ac", "2", "-ar", "44100", str(wav_path)],
-        check=True, capture_output=True,
+        check=True, **_subprocess_kwargs(),
     )
 
 

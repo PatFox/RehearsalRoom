@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import io
 import subprocess
+import sys
 import threading
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -53,12 +54,13 @@ def _rubberband_chunk(data: np.ndarray, sr: int, rate: float) -> np.ndarray:
     """Stretch *data* ([samples, channels]) by *rate* using ffmpeg rubberband filter."""
     buf = io.BytesIO()
     sf.write(buf, data, sr, format="WAV")
+    _no_window = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
     proc = subprocess.run(
         [_ffmpeg_exe(), "-y",
          "-f", "wav", "-i", "pipe:0",
          "-af", f"rubberband=tempo={rate:.6f}",
          "-f", "wav", "pipe:1"],
-        input=buf.getvalue(), capture_output=True,
+        input=buf.getvalue(), capture_output=True, **_no_window,
     )
     if proc.returncode != 0 or not proc.stdout:
         # Fallback: simple resampling (changes pitch — shouldn't normally happen)

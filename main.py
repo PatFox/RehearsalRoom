@@ -3,6 +3,15 @@
 import sys
 import os
 
+# In a PyInstaller --windowed (no-console) build, sys.stdout and sys.stderr
+# are None. Several libraries (torch.hub, tqdm, etc.) write to them
+# unconditionally and crash with "NoneType has no attribute 'write'".
+# Redirect to devnull so those writes are silently dropped.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
+
 # Ensure project root is on path
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -11,6 +20,7 @@ from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtCore import Qt
 
 from ui.main_window import MainWindow
+from ui.theme import Theme
 
 
 def main():
@@ -33,6 +43,14 @@ def main():
     # Default font
     default_font = QFont("Segoe UI", 10)
     app.setFont(default_font)
+
+    # First-run: download Demucs model weights if not already cached
+    from core.model_cache import is_model_cached
+    if not is_model_cached():
+        from ui.first_run_dialog import FirstRunDialog
+        dlg = FirstRunDialog(Theme())
+        if not dlg.exec() or not dlg.succeeded():
+            sys.exit(0)   # user cancelled or download failed — don't open main window
 
     win = MainWindow()
     win.show()

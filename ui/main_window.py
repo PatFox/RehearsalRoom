@@ -385,6 +385,10 @@ class MainWindow(QMainWindow):
     def _go_library(self):
         self._stack.setCurrentIndex(0)
         self._topbar.show()
+        # Always push the current song list and last-viewed times so the panel
+        # is never stale after a new import or a return from the player view.
+        self._library.set_songs(self._songs)
+        self._library.set_last_viewed(self._last_viewed)
 
     def _open_song(self, song: dict):
         self._current_song = song
