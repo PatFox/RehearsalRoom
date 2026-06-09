@@ -41,3 +41,7 @@ desktop.ini
 bin/ffmpeg.exe
 bin/ffprobe.exe
 bin/fpcalc.exe
+
+# Release build state (local only)
+.version
+installer/output/
