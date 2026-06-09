@@ -1,6 +1,8 @@
 # Rehearsal Room
 
-A desktop application that splits music tracks into individual stems (vocals, drums, bass, other) using AI, with a DAW-style mixer for playback.
+Rehearsal Room is intended as a practice tool for musicians: you can use it to split a music track (either from an audio file, or a YouTube URL) into "stems" -- i.e. separate files for i.e. vocals, drums, bass, and 'other' (e.g. guitar). Once this is done, you can play back the separate files and control each part individually: for example, change the volume of a specific part, mute certain tracks, or play just a single track.
+
+In addition, you can slow the audio down without affecting the pitch, and loop a section of the track. Loops can be saved, so that you can recall them later.
 
 ## Features
 
@@ -15,50 +17,32 @@ A desktop application that splits music tracks into individual stems (vocals, dr
 
 ## Requirements
 
-- Python 3.11+
-- Windows (macOS/Linux support planned)
+- Windows (macOS/Linux support planned...maybe)
 
-## Setup
+## Acknowledgments
 
-```bash
-pip install -r requirements.txt
-```
+First of all, it's important to note that most of the hard work behind the scenes is being done by libraries and utilities that were created by other much smarter people than me.
 
-### Optional: ffmpeg (for YouTube downloads)
+**UI**
+- **[PySide6](https://doc.qt.io/qtforpython/)** — the entire desktop UI: windows, panels, buttons, sliders, waveform canvas, signals/slots
 
-```bash
-pip install imageio-ffmpeg   # bundled binary — recommended
-```
+**Stem separation**
+- **[demucs](https://github.com/facebookresearch/demucs)** — the AI model that splits a song into vocals, drums, bass, and other stems
+- **[torch](https://pytorch.org/)** — PyTorch, the deep learning runtime that runs Demucs
+- **[torchaudio](https://pytorch.org/audio/)** — used for audio resampling (matching the source file's sample rate to Demucs' expected rate)
 
-Or place `ffmpeg.exe` and `ffprobe.exe` in the `bin/` folder.
+**Audio I/O & playback**
+- **[soundfile](https://python-soundfile.readthedocs.io/)** — reads/writes WAV and FLAC audio files; used when loading stems and encoding them
+- **[sounddevice](https://python-sounddevice.readthedocs.io/)** — plays audio through the system sound card via a low-latency streaming callback
+- **[numpy](https://numpy.org/)** — array maths used throughout audio processing (mixing stems, RMS waveform calculation, resampling)
+- **[imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg)** — bundles a static ffmpeg binary; used for Opus encoding, rubberband tempo-stretching, and format conversion
 
-### Optional: fpcalc (for AcoustID audio fingerprinting)
+**YouTube download**
+- **[yt-dlp](https://github.com/yt-dlp/yt-dlp)** — downloads audio from a YouTube URL
 
-Download `fpcalc.exe` from [acoustid.org/chromaprint](https://acoustid.org/chromaprint) and place it in `bin/`.  
-Then add your free API key in Settings (⚙).
+**Metadata**
+- **[mutagen](https://mutagen.readthedocs.io/)** — reads embedded tags (title, artist) from local audio files (MP3, FLAC, M4A, etc.)
+- **[pyacoustid](https://github.com/beetbox/pyacoustid)** — generates an audio fingerprint and queries the AcoustID/MusicBrainz database to identify a song when no tags are present
 
-## Running
-
-```bash
-python main.py
-```
-
-## Building a standalone executable
-
-```bash
-pip install pyinstaller
-python build.py
-```
-
-Output is in `dist/RehearsalRoom/`. Wrap with [Inno Setup](https://jrsoftware.org/isinfo.php) for a distributable installer.
-
-## Technology
-
-| Component | Library |
-|---|---|
-| GUI | PySide6 (Qt) |
-| Stem separation | Demucs v4 (htdemucs model) |
-| Audio playback | sounddevice + numpy |
-| YouTube download | yt-dlp |
-| File format | ZIP (.stems) + JSON manifest |
-| Metadata | mutagen, pyacoustid |
+**Build / packaging**
+- **[pyinstaller](https://pyinstaller.org/)** — packages the app and all its dependencies into a standalone Windows executable
