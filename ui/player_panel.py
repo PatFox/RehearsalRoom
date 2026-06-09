@@ -264,12 +264,17 @@ class FaderSlider(QWidget):
         self._val_lbl.setFixedWidth(38)
         self._val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._slider.valueChanged.connect(self._on_change)
+        self._slider.mouseDoubleClickEvent = lambda e: self._reset()
+        self._val_lbl.mouseDoubleClickEvent = lambda e: self._reset()
         lay.addWidget(self._slider, 1)
         lay.addWidget(self._val_lbl)
 
     def _on_change(self, v: int):
         self._val_lbl.setText(f"{v}%")
         self.value_changed.emit(v)
+
+    def _reset(self):
+        self._slider.setValue(100)
 
     def value(self) -> int:
         return self._slider.value()
@@ -558,6 +563,9 @@ class TransportBar(QFrame):
             self._master_val_lbl.setText(str(v)),
             self.master_changed.emit(v)
         ))
+        _reset_master = lambda e: self._master_slider.setValue(100)
+        self._master_slider.mouseDoubleClickEvent = _reset_master
+        self._master_val_lbl.mouseDoubleClickEvent = _reset_master
         master_group.addWidget(self._master_slider)
         master_group.addWidget(self._master_val_lbl)
         lay.addLayout(master_group)
@@ -966,8 +974,13 @@ class PlayerPanel(QWidget):
         self._title_lbl.setStyleSheet("font-size: 16px; font-weight: 600;")
         self._artist_lbl = QLabel("")
         self._artist_lbl.setStyleSheet(f"font-size: 12px; color: {self._theme.ink3};")
+        self._yt_link_lbl = QLabel("")
+        self._yt_link_lbl.setStyleSheet(f"font-size: 11px; color: {self._theme.ink3};")
+        self._yt_link_lbl.setOpenExternalLinks(True)
+        self._yt_link_lbl.hide()
         meta_col.addWidget(self._title_lbl)
         meta_col.addWidget(self._artist_lbl)
+        meta_col.addWidget(self._yt_link_lbl)
         top_lay.addLayout(meta_col)
         top_lay.addStretch()
 
@@ -1139,6 +1152,13 @@ class PlayerPanel(QWidget):
         self._title_lbl.setText(song.get("title", ""))
         self._artist_lbl.setText(song.get("artist", ""))
         self._art.update_song(song["grad"][0], song["grad"][1], song.get("seed", 1))
+
+        source_url = song.get("source_url", "")
+        if source_url:
+            self._yt_link_lbl.setText(f'▶ <a href="{source_url}" style="color: #FF5A5F;">Open on YouTube</a>')
+            self._yt_link_lbl.show()
+        else:
+            self._yt_link_lbl.hide()
 
         # File size chip
         from core.library_stats import fmt_size as _fmt_size

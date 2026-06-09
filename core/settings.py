@@ -1,5 +1,6 @@
 """Persistent application settings stored in ~/.rehearsalroom/settings.json."""
 
+import builtins
 import json
 from pathlib import Path
 
@@ -43,3 +44,30 @@ def set(key: str, value) -> None:
 
 def library_path() -> Path:
     return Path(load()["library_path"])
+
+
+def get_last_viewed() -> dict:
+    """Return {song_id: unix_timestamp} of last-viewed times."""
+    return dict(load().get("last_viewed", {}))
+
+
+def record_viewed(song_id: str) -> None:
+    """Record that *song_id* was just opened (stores current time)."""
+    import time
+    data = load()
+    lv = data.get("last_viewed", {})
+    lv[song_id] = time.time()
+    data["last_viewed"] = lv
+    save(data)
+
+
+def get_favourites() -> builtins.set:
+    """Return the set of favourited song IDs (stems_path strings)."""
+    return builtins.set(load().get("favourites", []))
+
+
+def set_favourites(favs: set) -> None:
+    """Persist the set of favourited song IDs."""
+    data = load()
+    data["favourites"] = list(favs)
+    save(data)

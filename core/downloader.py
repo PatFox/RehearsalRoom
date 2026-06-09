@@ -40,23 +40,39 @@ class DownloaderWorker(QThread):
             ffmpeg_exe, ffmpeg_dir = _get_ffmpeg()
             self.progress.emit(5, "Connecting to YouTube…")
 
-            # Prefer m4a — it's a complete non-fragmented stream that doesn't
-            # require ffmpeg to reassemble DASH fragments.
-            # Fall back to any best audio if m4a isn't available.
             raw_template = os.path.join(self.output_dir, "raw.%(ext)s")
+
+            # Collect yt-dlp warnings/errors so silent failures surface in our UI.
+            _ydl_errors: list[str] = []
+
+            class _Logger:
+                def debug(self, msg):   pass
+                def info(self, msg):    pass
+                def warning(self, msg): _ydl_errors.append(f"WARNING: {msg}")
+                def error(self, msg):   _ydl_errors.append(f"ERROR: {msg}")
+
             ydl_opts = {
-                "format": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio",
+                "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
                 "outtmpl": raw_template,
                 "quiet": True,
-                "no_warnings": True,
-                "ffmpeg_location": ffmpeg_dir,   # for any merging yt-dlp needs to do
+                "no_warnings": False,
+                "socket_timeout": 30,       # don't hang indefinitely
+                "retries": 5,
+                "fragment_retries": 5,
+                "ffmpeg_location": ffmpeg_dir,
                 "progress_hooks": [self._hook],
+                "logger": _Logger(),
             }
 
             self.progress.emit(10, "Fetching audio info…")
             yt_info: dict = {}
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 yt_info = ydl.extract_info(self.url, download=True) or {}
+
+            if not yt_info:
+                detail = "\n".join(_ydl_errors) if _ydl_errors else "No details available."
+                self.error.emit(f"yt-dlp could not fetch the video.\n\n{detail}")
+                return
 
             # Find the downloaded file
             raw_path = None
@@ -66,10 +82,13 @@ class DownloaderWorker(QThread):
                     break
 
             if not raw_path:
-                self.error.emit("Download finished but no audio file was found.")
+                detail = "\n".join(_ydl_errors) if _ydl_errors else ""
+                self.error.emit(
+                    "Download finished but no audio file was found.\n\n"
+                    + (detail or "Check that the URL is a public YouTube video.")
+                )
                 return
 
-            # Validate the file has actual content
             if os.path.getsize(raw_path) < 1024:
                 self.error.emit(f"Downloaded file is too small and likely corrupt: {raw_path}")
                 return

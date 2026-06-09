@@ -204,6 +204,11 @@ class WaveformWidget(QWidget):
                 col.setAlphaF(1.0 if x < play_x else 0.28)
             painter.fillRect(QRectF(x, mid - amp, _BAR_W, amp * 2), col)
 
+        # --- playhead line ---
+        if 0.0 <= play_x <= w:
+            painter.setPen(QColor(180, 180, 180, 220))
+            painter.drawLine(QPointF(play_x, 0), QPointF(play_x, h))
+
         # --- loop region ---
         ls, le = self._loop_start, self._loop_end
         if self._drag_mode == "loop_new" and self._loop_preview_start >= 0:

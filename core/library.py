@@ -49,6 +49,7 @@ def song_from_stems_file(stems_path: Path) -> dict | None:
             "durationMs": manifest.duration_ms,
             "addedLabel": _added_label(mtime),
             "source": manifest.source_url and "youtube" or "file",
+            "source_url": manifest.source_url or "",
             "grad": grad,
             "stems_path": str(stems_path),
             "file_size": file_size,

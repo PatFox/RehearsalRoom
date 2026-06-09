@@ -173,13 +173,6 @@ class Sidebar(QFrame):
         lay.addLayout(brand_row)
         lay.addSpacing(14)
 
-        # nav label
-        nav_lbl = QLabel("Library")
-        nav_lbl.setStyleSheet(
-            "font-size: 10px; font-weight: 600; letter-spacing: 0.13em; text-transform: uppercase; "
-            "color: #93939C; padding: 8px 10px 2px;"
-        )
-        lay.addWidget(nav_lbl)
 
         self._nav_buttons: dict[str, SidebarButton] = {}
         for key, icon, label, cnt in [
@@ -205,9 +198,7 @@ class Sidebar(QFrame):
 
         # storage
         storage = QFrame()
-        storage.setStyleSheet(
-            f"QFrame {{ border: 1px solid #E2E2DC; border-radius: 10px; background: transparent; }}"
-        )
+        storage.setStyleSheet("QFrame { border: none; background: transparent; }")
         stor_lay = QVBoxLayout(storage)
         stor_lay.setContentsMargins(11, 10, 11, 10)
         stor_lay.setSpacing(3)
@@ -237,7 +228,7 @@ class Sidebar(QFrame):
         self.setStyleSheet(f"""
             QFrame {{
                 background: {t.surface};
-                border-right: 1px solid {t.border};
+                border-right: none;
             }}
             QPushButton {{
                 background: transparent;
@@ -298,6 +289,8 @@ class MainWindow(QMainWindow):
 
         self._theme = Theme()
         self._songs: list[dict] = []
+        self._favourites: set[str] = S.get_favourites()
+        self._last_viewed: dict[str, float] = S.get_last_viewed()
         self._current_song: dict | None = None
         self._worker: SeparatorWorker | None = None
         self._dl_worker: DownloaderWorker | None = None
@@ -359,11 +352,7 @@ class MainWindow(QMainWindow):
         settings_btn.clicked.connect(self._open_settings)
         tb_lay.addWidget(settings_btn)
 
-        import_top_btn = QPushButton("+ Import")
-        import_top_btn.setProperty("role", "primary")
-        import_top_btn.setFixedHeight(36)
-        import_top_btn.clicked.connect(self._open_import)
-        tb_lay.addWidget(import_top_btn)
+
         main_lay.addWidget(self._topbar)
 
         # stacked: library / player
@@ -372,7 +361,10 @@ class MainWindow(QMainWindow):
         self._library = LibraryPanel(self._theme)
         self._library.song_opened.connect(self._open_song)
         self._library.import_requested.connect(self._open_import)
+        self._library.favourite_toggled.connect(self._on_favourite_toggled)
         self._library.set_songs(self._songs)
+        self._library.set_favourites(self._favourites)
+        self._library.set_last_viewed(self._last_viewed)
         self._stack.addWidget(self._library)  # index 0
 
         self._player = PlayerPanel(self._theme)
@@ -396,6 +388,9 @@ class MainWindow(QMainWindow):
 
     def _open_song(self, song: dict):
         self._current_song = song
+        S.record_viewed(song["id"])
+        self._last_viewed = S.get_last_viewed()
+        self._library.set_last_viewed(self._last_viewed)
         # Attach loops from manifest if not already present
         if song.get("stems_path") and "loops" not in song:
             try:
@@ -424,11 +419,20 @@ class MainWindow(QMainWindow):
 
     def _on_nav(self, key: str):
         self._go_library()
-        nav_names = {"library": "Library", "recent": "Recent", "fav": "Favorites"}
+        nav_names = {"library": "Library", "recent": "Recently played", "fav": "Favourites"}
         self._topbar_title.setText(nav_names.get(key, "Library"))
+        self._library.set_nav_filter(key if key in ("fav", "recent") else "all")
 
     def _on_search(self, text: str):
         self._library.filter(text)
+
+    def _on_favourite_toggled(self, song_id: str, is_fav: bool):
+        if is_fav:
+            self._favourites.add(song_id)
+        else:
+            self._favourites.discard(song_id)
+        S.set_favourites(self._favourites)
+        self._library.set_favourites(self._favourites)
 
     # ------------------------------------------------------------------
     # Import

@@ -89,15 +89,27 @@ class SeparatorWorker(QThread):
 
             self.progress.emit(20, "Separating stems (this may take a few minutes)…")
 
-            with torch.no_grad():
-                sources = apply_model(
-                    model,
-                    wav,
-                    progress=lambda i, total: self.progress.emit(
-                        20 + int(i / total * 70), f"Separating… {int(i / total * 100)}%"
-                    ),
-                    num_workers=0,
-                )
+            # Demucs' apply_model accepts progress=bool and uses tqdm internally.
+            # We intercept by temporarily replacing tqdm.tqdm with a subclass that
+            # calls our signal on every iteration tick.
+            import tqdm as _tqdm_mod
+            _orig_tqdm = _tqdm_mod.tqdm
+            _emit = lambda pct, msg: self.progress.emit(pct, msg)
+
+            class _SignalTqdm(_orig_tqdm):
+                def update(self, n=1):
+                    result = super().update(n)
+                    if self.total:
+                        frac = min(1.0, self.n / self.total)
+                        _emit(20 + int(frac * 70), f"Separating… {int(frac * 100)}%")
+                    return result
+
+            _tqdm_mod.tqdm = _SignalTqdm
+            try:
+                with torch.no_grad():
+                    sources = apply_model(model, wav, progress=True, num_workers=0)
+            finally:
+                _tqdm_mod.tqdm = _orig_tqdm
 
             self.progress.emit(90, "Saving stems…")
 

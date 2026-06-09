@@ -1,41 +1,98 @@
-"""Library panel — song list with artwork, stems chips, duration, date."""
+"""Library panel — song list with artwork, sortable columns."""
 
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QColor, QFont
+from __future__ import annotations
+
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QFrame, QLineEdit, QSizePolicy
+    QScrollArea, QFrame, QSizePolicy
 )
 
+import time as _time
+
 from core.library_stats import fmt_size as _fmt_size
-from ui.theme import Theme, STEM_IDS
+from ui.theme import Theme
 from ui.widgets import ArtThumbnail
 
 
-class StemChips(QWidget):
-    def __init__(self, stem_colors: list, parent=None):
-        super().__init__(parent)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(5)
-        for c in stem_colors:
-            dot = QFrame()
-            dot.setFixedSize(9, 9)
-            dot.setStyleSheet(f"background:{c}; border-radius:4px;")
-            lay.addWidget(dot)
-        lbl = QLabel(f"{len(stem_colors)} stems")
-        lbl.setStyleSheet("font-family: 'Consolas', monospace; font-size: 12px; color: inherit;")
-        lay.addWidget(lbl)
-        lay.addStretch()
+def _fmt_viewed(ts: float | None) -> str:
+    """Format a unix timestamp as a human-readable 'last played' string."""
+    if not ts:
+        return "Never"
+    age = _time.time() - ts
+    if age < 60:
+        return "Just now"
+    if age < 3600:
+        mins = int(age / 60)
+        return f"{mins} min{'s' if mins != 1 else ''} ago"
+    if age < 86400:
+        hrs = int(age / 3600)
+        return f"{hrs} hr{'s' if hrs != 1 else ''} ago"
+    days = int(age / 86400)
+    if days == 1:
+        return "Yesterday"
+    if days < 7:
+        return f"{days} days ago"
+    if days < 14:
+        return "Last week"
+    if days < 30:
+        return f"{int(days / 7)} weeks ago"
+    return f"{int(days / 30)} months ago"
+
+
+# ── column definitions ────────────────────────────────────────────────────────
+# (key, header label, fixed_width or 0 for stretch, sort key fn)
+_COLS = [
+    ("title",       "Track",       0,    lambda s: (s.get("title",  "") or "").lower()),
+    ("artist",      "Artist",      0,    lambda s: (s.get("artist", "") or "").lower()),
+    ("duration",    "Length",      64,   lambda s: s.get("durationMs", 0)),
+    ("size",        "Size",        72,   lambda s: s.get("file_size", 0)),
+    ("last_viewed", "Last played", 104,  lambda s: -(s.get("last_viewed") or 0)),
+    ("added",       "Added",       96,   lambda s: -s.get("_mtime", 0)),
+]
+_DEFAULT_SORT = "title"
+_DEFAULT_ASC  = True
+
+
+class _HeaderLabel(QLabel):
+    """A column-header label that emits `clicked` when pressed."""
+    clicked = Signal(str)   # column key
+
+    def __init__(self, key: str, text: str, theme: Theme, parent=None):
+        super().__init__(text, parent)
+        self._key = key
+        self._theme = theme
+        self._sort_dir: str | None = None   # None / "asc" / "desc"
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._refresh()
+
+    def set_sort(self, direction: str | None):
+        self._sort_dir = direction
+        self._refresh()
+
+    def _refresh(self):
+        arrow = ""
+        if self._sort_dir == "asc":
+            arrow = "  ▲"
+        elif self._sort_dir == "desc":
+            arrow = "  ▼"
+        self.setText(self.text().split("  ")[0] + arrow)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._key)
+        super().mousePressEvent(e)
 
 
 class SongRow(QFrame):
-    clicked = Signal(dict)
+    clicked           = Signal(dict)
+    favourite_toggled = Signal(str, bool)   # (song_id, is_now_favourite)
 
-    def __init__(self, song: dict, theme: Theme, parent=None):
+    def __init__(self, song: dict, theme: Theme, is_fav: bool = False, parent=None):
         super().__init__(parent)
-        self._song = song
-        self._theme = theme
+        self._song   = song
+        self._theme  = theme
+        self._is_fav = is_fav
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._setup_ui()
         self.apply_theme(theme)
@@ -43,63 +100,94 @@ class SongRow(QFrame):
     def _setup_ui(self):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 8, 12, 8)
-        lay.setSpacing(16)
-
+        lay.setSpacing(10)
         s = self._song
+
+        # star
+        self._star_btn = QPushButton()
+        self._star_btn.setFixedSize(24, 24)
+        self._star_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._star_btn.setFlat(True)
+        self._star_btn.clicked.connect(self._on_star_clicked)
+        self._update_star()
+        lay.addWidget(self._star_btn)
+
+        # artwork
         self._art = ArtThumbnail(s["grad"][0], s["grad"][1], s.get("seed", 1), 44)
         lay.addWidget(self._art)
 
-        # title + artist
-        info = QVBoxLayout()
-        info.setSpacing(2)
+        # title
         self._title_lbl = QLabel(s["title"])
         self._title_lbl.setStyleSheet("font-size: 14px; font-weight: 600;")
-        self._artist_lbl = QLabel(s["artist"])
-        self._artist_lbl.setStyleSheet("font-size: 12px;")
-        info.addWidget(self._title_lbl)
-        info.addWidget(self._artist_lbl)
-        info_w = QWidget()
-        info_w.setLayout(info)
-        info_w.setMinimumWidth(160)
-        lay.addWidget(info_w, 1)
+        self._title_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        lay.addWidget(self._title_lbl, 1)
 
-        # stems chips
-        chip_w = StemChips([
-            "#FF5A5F", "#F2A23A", "#7C5CFF", "#15B6A4"
-        ])
-        chip_w.setFixedWidth(150)
-        lay.addWidget(chip_w)
+        # artist
+        self._artist_lbl = QLabel(s.get("artist", ""))
+        self._artist_lbl.setStyleSheet(f"font-size: 13px; color: {self._theme.ink3};")
+        self._artist_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        lay.addWidget(self._artist_lbl, 1)
 
         # duration
-        ms = s.get("durationMs", 0)
+        ms   = s.get("durationMs", 0)
         secs = ms // 1000
-        dur_str = f"{secs // 60}:{secs % 60:02d}"
-        dur_lbl = QLabel(dur_str)
+        dur_lbl = QLabel(f"{secs // 60}:{secs % 60:02d}")
         dur_lbl.setStyleSheet("font-family: 'Consolas', monospace; font-size: 13px;")
-        dur_lbl.setFixedWidth(48)
+        dur_lbl.setFixedWidth(64)
+        dur_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         lay.addWidget(dur_lbl)
 
         # file size
         size_lbl = QLabel(_fmt_size(s.get("file_size", 0)))
         size_lbl.setStyleSheet(f"font-size: 12px; color: {self._theme.ink3};")
-        size_lbl.setFixedWidth(60)
+        size_lbl.setFixedWidth(72)
+        size_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         lay.addWidget(size_lbl)
+
+        # last played
+        viewed_lbl = QLabel(_fmt_viewed(s.get("last_viewed")))
+        viewed_lbl.setStyleSheet(f"font-size: 12px; color: {self._theme.ink3};")
+        viewed_lbl.setFixedWidth(104)
+        viewed_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(viewed_lbl)
 
         # added
         added_lbl = QLabel(s.get("addedLabel", ""))
         added_lbl.setStyleSheet("font-size: 12px;")
-        added_lbl.setFixedWidth(88)
+        added_lbl.setFixedWidth(96)
+        added_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         lay.addWidget(added_lbl)
+
+    # ── star ─────────────────────────────────────────────────────────────────
+
+    def _update_star(self):
+        if self._is_fav:
+            self._star_btn.setText("★")
+            self._star_btn.setStyleSheet(
+                "QPushButton { border: none; background: transparent; "
+                "font-size: 16px; color: #F2A23A; padding: 0; }"
+            )
+        else:
+            self._star_btn.setText("☆")
+            self._star_btn.setStyleSheet(
+                "QPushButton { border: none; background: transparent; "
+                "font-size: 16px; color: #AAAAAA; padding: 0; }"
+            )
+
+    def _on_star_clicked(self):
+        self._is_fav = not self._is_fav
+        self._update_star()
+        self.favourite_toggled.emit(self._song["id"], self._is_fav)
+
+    # ── theme / events ───────────────────────────────────────────────────────
 
     def apply_theme(self, theme: Theme):
         self._theme = theme
-        self._artist_lbl.setStyleSheet(f"font-size: 12px; color: {theme.ink3};")
-        self._hover_bg = theme.surface2
-        self._normal_bg = "transparent"
-        self.setStyleSheet(f"""
-            SongRow {{ background: transparent; border-radius: 10px; }}
-            SongRow:hover {{ background: {theme.surface2}; }}
-        """)
+        self._artist_lbl.setStyleSheet(f"font-size: 13px; color: {theme.ink3};")
+        self.setStyleSheet(
+            f"SongRow {{ background: transparent; border-radius: 10px; }}"
+            f"SongRow:hover {{ background: {theme.surface2}; }}"
+        )
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
@@ -113,32 +201,65 @@ class SongRow(QFrame):
 
 
 class LibraryPanel(QWidget):
-    song_opened = Signal(dict)
-    import_requested = Signal()
+    song_opened       = Signal(dict)
+    import_requested  = Signal()
+    favourite_toggled = Signal(str, bool)
 
     def __init__(self, theme: Theme, parent=None):
         super().__init__(parent)
-        self._theme = theme
-        self._songs: list[dict] = []
-        self._rows: list[SongRow] = []
+        self._theme         = theme
+        self._songs:    list[dict] = []
+        self._rows:     list[SongRow] = []
+        self._favourites:   set[str] = set()
+        self._last_viewed:  dict[str, float] = {}
+        self._nav_filter:   str = "all"
+        self._search_query: str = ""
+        self._sort_key: str = _DEFAULT_SORT
+        self._sort_asc: bool = _DEFAULT_ASC
+        self._header_labels: dict[str, _HeaderLabel] = {}
         self._setup_ui()
+
+    # ── public API ────────────────────────────────────────────────────────────
+
+    def set_songs(self, songs: list[dict]):
+        self._songs = songs
+        self._rebuild_rows()
+
+    def set_favourites(self, favs: set[str]):
+        self._favourites = favs
+        self._rebuild_rows()
+
+    def set_last_viewed(self, last_viewed: dict[str, float]):
+        self._last_viewed = last_viewed
+        self._rebuild_rows()
+
+    def set_nav_filter(self, nav_filter: str):
+        self._nav_filter = nav_filter
+        titles = {"fav": "Favourites", "recent": "Recently played", "all": "All tracks"}
+        self._head_lbl.setText(titles.get(nav_filter, "All tracks"))
+        self._rebuild_rows()
+
+    def filter(self, query: str):
+        self._search_query = query
+        self._rebuild_rows()
+
+    # ── UI construction ───────────────────────────────────────────────────────
 
     def _setup_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # scroll area
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
 
         self._content = QWidget()
-        self._content_lay = QVBoxLayout(self._content)
-        self._content_lay.setContentsMargins(28, 26, 28, 60)
-        self._content_lay.setSpacing(0)
+        cl = QVBoxLayout(self._content)
+        cl.setContentsMargins(28, 26, 28, 60)
+        cl.setSpacing(0)
 
-        # header row
+        # heading row
         self._head_lbl = QLabel("All tracks")
         self._head_lbl.setStyleSheet("font-size: 15px; font-weight: 600;")
         self._meta_lbl = QLabel("")
@@ -148,109 +269,201 @@ class LibraryPanel(QWidget):
         head_row.addWidget(self._head_lbl)
         head_row.addWidget(self._meta_lbl)
         head_row.addStretch()
-        self._content_lay.addLayout(head_row)
+        cl.addLayout(head_row)
 
-        # column headers
+        # column header bar
         col_head = QHBoxLayout()
         col_head.setContentsMargins(12, 0, 12, 0)
-        for (text, stretch, fixed) in [
-            ("", 0, 44), ("Track", 1, 0), ("Stems", 0, 150),
-            ("Length", 0, 60), ("Added", 0, 100),
-        ]:
-            lbl = QLabel(text)
-            lbl.setStyleSheet("font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;")
+        col_head.setSpacing(10)
+
+        # spacers matching star + artwork leading widgets
+        col_head.addSpacing(24 + 10 + 44 + 10)   # star + gap + art + gap
+
+        base_style = (
+            "font-size: 11px; font-weight: 600; letter-spacing: 0.08em; "
+            "text-transform: uppercase;"
+        )
+
+        for key, label, fixed, _ in _COLS:
+            lbl = _HeaderLabel(key, label, self._theme)
+            lbl.setStyleSheet(base_style)
             if fixed:
                 lbl.setFixedWidth(fixed)
-            if stretch:
-                col_head.addWidget(lbl, stretch)
-            else:
+                lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            lbl.clicked.connect(self._on_header_clicked)
+            self._header_labels[key] = lbl
+            if fixed:
                 col_head.addWidget(lbl)
-        col_head.addSpacing(28)  # menu button column
+            else:
+                col_head.addWidget(lbl, 1)
 
-        col_head_w = QWidget()
-        col_head_w.setLayout(col_head)
-        col_head_w.setFixedHeight(36)
-        self._col_head_w = col_head_w
-        self._content_lay.addWidget(col_head_w)
+        self._col_head_w = QWidget()
+        self._col_head_w.setLayout(col_head)
+        self._col_head_w.setFixedHeight(36)
+        cl.addWidget(self._col_head_w)
+        self._update_header_arrows()
 
-        # separator line
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        self._sep = sep
-        self._content_lay.addWidget(sep)
+        # separator
+        self._sep = QFrame()
+        self._sep.setFrameShape(QFrame.Shape.HLine)
+        cl.addWidget(self._sep)
 
-        # rows container
+        # rows
         self._rows_w = QWidget()
         self._rows_lay = QVBoxLayout(self._rows_w)
         self._rows_lay.setContentsMargins(0, 4, 0, 0)
         self._rows_lay.setSpacing(0)
-        self._content_lay.addWidget(self._rows_w)
-        self._content_lay.addStretch()
+        cl.addWidget(self._rows_w)
+        cl.addStretch()
 
-        # empty state
+        # empty: no library
         self._empty = QWidget()
-        emp_lay = QVBoxLayout(self._empty)
-        emp_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        emp_lbl = QLabel("Your library is empty")
-        emp_lbl.setStyleSheet("font-size: 17px; font-weight: 600;")
-        emp_sub = QLabel("Import a song from a file or a YouTube link to split it into stems.")
-        emp_sub.setStyleSheet("font-size: 13px;")
-        emp_sub.setWordWrap(True)
-        emp_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        emp_btn = QPushButton("+ Import a track")
-        emp_btn.setProperty("role", "primary")
-        emp_btn.setFixedWidth(160)
-        emp_btn.clicked.connect(self.import_requested)
-        emp_lay.addWidget(emp_lbl, 0, Qt.AlignmentFlag.AlignHCenter)
-        emp_lay.addWidget(emp_sub, 0, Qt.AlignmentFlag.AlignHCenter)
-        emp_lay.addWidget(emp_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        el = QVBoxLayout(self._empty)
+        el.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        e1 = QLabel("Your library is empty")
+        e1.setStyleSheet("font-size: 17px; font-weight: 600;")
+        e2 = QLabel("Import a song from a file or a YouTube link to split it into stems.")
+        e2.setStyleSheet("font-size: 13px;")
+        e2.setWordWrap(True)
+        e2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        eb = QPushButton("+ Import a track")
+        eb.setProperty("role", "primary")
+        eb.setFixedWidth(160)
+        eb.clicked.connect(self.import_requested)
+        el.addWidget(e1, 0, Qt.AlignmentFlag.AlignHCenter)
+        el.addWidget(e2, 0, Qt.AlignmentFlag.AlignHCenter)
+        el.addWidget(eb, 0, Qt.AlignmentFlag.AlignHCenter)
         self._empty.hide()
-        self._content_lay.addWidget(self._empty, 0, Qt.AlignmentFlag.AlignCenter)
+        cl.addWidget(self._empty, 0, Qt.AlignmentFlag.AlignCenter)
+
+        # empty: no recent plays
+        self._empty_recent = QWidget()
+        rl = QVBoxLayout(self._empty_recent)
+        rl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        r1 = QLabel("No recently played tracks")
+        r1.setStyleSheet("font-size: 17px; font-weight: 600;")
+        r2 = QLabel("Tracks you open will appear here.")
+        r2.setStyleSheet("font-size: 13px;")
+        r2.setWordWrap(True)
+        r2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        rl.addWidget(r1, 0, Qt.AlignmentFlag.AlignHCenter)
+        rl.addWidget(r2, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._empty_recent.hide()
+        cl.addWidget(self._empty_recent, 0, Qt.AlignmentFlag.AlignCenter)
+
+        # empty: no favourites
+        self._empty_fav = QWidget()
+        fl = QVBoxLayout(self._empty_fav)
+        fl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        f1 = QLabel("No favourites yet")
+        f1.setStyleSheet("font-size: 17px; font-weight: 600;")
+        f2 = QLabel("Click the ☆ star next to any track to add it to your favourites.")
+        f2.setStyleSheet("font-size: 13px;")
+        f2.setWordWrap(True)
+        f2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        fl.addWidget(f1, 0, Qt.AlignmentFlag.AlignHCenter)
+        fl.addWidget(f2, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._empty_fav.hide()
+        cl.addWidget(self._empty_fav, 0, Qt.AlignmentFlag.AlignCenter)
 
         self._scroll.setWidget(self._content)
         root.addWidget(self._scroll)
 
-    def set_songs(self, songs: list[dict]):
-        self._songs = songs
-        self._rebuild_rows(songs)
+    # ── sorting ───────────────────────────────────────────────────────────────
 
-    def filter(self, query: str):
-        q = query.lower()
-        filtered = [s for s in self._songs if not q or
-                    q in s["title"].lower() or q in s.get("artist", "").lower()]
-        self._rebuild_rows(filtered)
+    def _on_header_clicked(self, key: str):
+        if self._sort_key == key:
+            self._sort_asc = not self._sort_asc
+        else:
+            self._sort_key = key
+            # "added" naturally means newest-first → default desc
+            self._sort_asc = key != "added"
+        self._update_header_arrows()
+        self._rebuild_rows()
 
-    def _rebuild_rows(self, songs: list[dict]):
-        # clear existing rows
+    def _update_header_arrows(self):
+        for key, lbl in self._header_labels.items():
+            if key == self._sort_key:
+                lbl.set_sort("asc" if self._sort_asc else "desc")
+            else:
+                lbl.set_sort(None)
+
+    def _sorted(self, songs: list[dict]) -> list[dict]:
+        col = next((c for c in _COLS if c[0] == self._sort_key), _COLS[0])
+        key_fn = col[3]
+        return sorted(songs, key=key_fn, reverse=not self._sort_asc)
+
+    # ── row building ──────────────────────────────────────────────────────────
+
+    def _visible_songs(self) -> list[dict]:
+        songs = self._songs
+        if self._nav_filter == "fav":
+            songs = [s for s in songs if s["id"] in self._favourites]
+        elif self._nav_filter == "recent":
+            viewed = self._last_viewed
+            songs = [s for s in songs if s["id"] in viewed]
+            songs = sorted(songs, key=lambda s: viewed[s["id"]], reverse=True)[:10]
+            # return early — recent has its own fixed order, skip generic sort
+            if self._search_query:
+                q = self._search_query.lower()
+                songs = [s for s in songs if
+                         q in (s.get("title") or "").lower() or
+                         q in (s.get("artist") or "").lower()]
+            return songs
+        if self._search_query:
+            q = self._search_query.lower()
+            songs = [s for s in songs if
+                     q in (s.get("title") or "").lower() or
+                     q in (s.get("artist") or "").lower()]
+        return self._sorted(songs)
+
+    def _rebuild_rows(self):
         for row in self._rows:
             self._rows_lay.removeWidget(row)
             row.deleteLater()
         self._rows.clear()
 
+        songs = self._visible_songs()
         self._meta_lbl.setText(f"{len(songs)} {'track' if len(songs) == 1 else 'tracks'}")
+
+        self._empty.hide()
+        self._empty_recent.hide()
+        self._empty_fav.hide()
 
         if not songs:
             self._col_head_w.hide()
             self._sep.hide()
-            self._empty.show()
+            if self._nav_filter == "fav":
+                self._empty_fav.show()
+            elif self._nav_filter == "recent":
+                self._empty_recent.show()
+            else:
+                self._empty.show()
             return
 
         self._col_head_w.show()
         self._sep.show()
-        self._empty.hide()
 
         for song in songs:
-            row = SongRow(song, self._theme)
+            # Inject last_viewed so both the sort key and the row label can use it
+            song = {**song, "last_viewed": self._last_viewed.get(song["id"])}
+            row = SongRow(song, self._theme, is_fav=song["id"] in self._favourites)
             row.clicked.connect(self.song_opened)
+            row.favourite_toggled.connect(self.favourite_toggled)
             self._rows_lay.addWidget(row)
             self._rows.append(row)
 
+    # ── theme ─────────────────────────────────────────────────────────────────
+
     def apply_theme(self, theme: Theme):
         self._theme = theme
-        self._meta_lbl.setStyleSheet(f"font-family: 'Consolas', monospace; font-size: 13px; color: {theme.ink3};")
+        self._meta_lbl.setStyleSheet(
+            f"font-family: 'Consolas', monospace; font-size: 13px; color: {theme.ink3};")
         self._sep.setStyleSheet(f"color: {theme.border};")
-        for col_lbl in self._col_head_w.findChildren(QLabel):
-            col_lbl.setStyleSheet(
-                f"font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: {theme.ink3};")
+        base = (
+            f"font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: {theme.ink3};"
+        )
+        for lbl in self._header_labels.values():
+            lbl.setStyleSheet(base)
         for row in self._rows:
             row.apply_theme(theme)
