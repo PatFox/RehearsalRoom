@@ -1274,6 +1274,8 @@ class PlayerPanel(QWidget):
 
         self._transport.set_time(int(self._time_ms))
         self._update_progress(self._time_ms / self._duration)
+        if self._loop_state == 1:
+            self._update_loop_display()
         if self._auto_center:
             self._center_playhead()
 
@@ -1335,7 +1337,7 @@ class PlayerPanel(QWidget):
             end_frac         = self._loop_end_ms / self._duration
             end_placeholder  = False
         elif self._loop_state == 1:
-            end_frac         = 1.0   # overlay extends to end of track while awaiting end marker
+            end_frac         = self._time_ms / self._duration   # tracks playhead
             end_placeholder  = True
         else:
             end_frac         = -1.0
