@@ -1148,6 +1148,10 @@ class PlayerPanel(QWidget):
         self._solos = {s: False for s in STEM_IDS}
         self._volumes = {s: 100 for s in STEM_IDS}
         self._stem_labels = {s: STEM_LABELS[i] for i, s in enumerate(STEM_IDS)}
+        self._loop_state    = 0
+        self._loop_start_ms = -1.0
+        self._loop_end_ms   = -1.0
+        self._transport.set_loop_state(0)
 
         self._title_lbl.setText(song.get("title", ""))
         self._artist_lbl.setText(song.get("artist", ""))
