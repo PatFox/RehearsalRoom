@@ -365,8 +365,8 @@ class StemLane(QFrame):
     def set_progress(self, p: float):
         self._wave.set_progress(p)
 
-    def set_loop_region(self, start: float, end: float):
-        self._wave.set_loop_region(start, end)
+    def set_loop_region(self, start: float, end: float, end_is_placeholder: bool = False):
+        self._wave.set_loop_region(start, end, end_is_placeholder)
 
     def set_zoom_scroll(self, zoom: float, scroll_frac: float):
         self._wave.set_zoom_scroll(zoom, scroll_frac)
@@ -1332,11 +1332,16 @@ class PlayerPanel(QWidget):
         else:
             start_frac = -1.0
         if self._loop_state == 2:
-            end_frac = self._loop_end_ms / self._duration
+            end_frac         = self._loop_end_ms / self._duration
+            end_placeholder  = False
+        elif self._loop_state == 1:
+            end_frac         = 1.0   # overlay extends to end of track while awaiting end marker
+            end_placeholder  = True
         else:
-            end_frac = -1.0
+            end_frac         = -1.0
+            end_placeholder  = False
         for lane in self._lanes.values():
-            lane.set_loop_region(start_frac, end_frac)
+            lane.set_loop_region(start_frac, end_frac, end_placeholder)
 
         # If the loop is fully defined and the playhead is outside it, jump to start
         if self._loop_state == 2:

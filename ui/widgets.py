@@ -100,6 +100,7 @@ class WaveformWidget(QWidget):
         self._muted: bool = False
         self._loop_start: float = -1.0
         self._loop_end:   float = -1.0
+        self._loop_end_placeholder: bool = False
         self._drag_mode: str = ""
         self._drag_origin: float = 0.0
         self._loop_preview_start: float = -1.0
@@ -126,9 +127,10 @@ class WaveformWidget(QWidget):
         self._muted = m
         self.update()
 
-    def set_loop_region(self, start: float, end: float):
-        self._loop_start = start
-        self._loop_end   = end
+    def set_loop_region(self, start: float, end: float, end_is_placeholder: bool = False):
+        self._loop_start          = start
+        self._loop_end            = end
+        self._loop_end_placeholder = end_is_placeholder
         self.update()
 
     def set_zoom_scroll(self, zoom: float, scroll_frac: float):
@@ -214,15 +216,20 @@ class WaveformWidget(QWidget):
         if self._drag_mode == "loop_new" and self._loop_preview_start >= 0:
             ls, le = self._loop_preview_start, self._loop_preview_end
 
+        end_placeholder = self._loop_end_placeholder
+        if self._drag_mode == "loop_new":
+            end_placeholder = False   # real drag — always show both ends
         if ls >= 0 and le > ls:
             x1, x2 = self._screen_x(ls), self._screen_x(le)
             painter.fillRect(QRectF(x1, 0, x2 - x1, h), _LOOP_FILL)
             painter.setPen(_LOOP_BORDER)
             painter.drawLine(QPointF(x1, 0), QPointF(x1, h))
-            painter.drawLine(QPointF(x2, 0), QPointF(x2, h))
+            if not end_placeholder:
+                painter.drawLine(QPointF(x2, 0), QPointF(x2, h))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(_LOOP_BORDER)
-            for hx in (x1, x2):
+            handles = (x1,) if end_placeholder else (x1, x2)
+            for hx in handles:
                 painter.drawEllipse(QPointF(hx, 10), 5, 5)
 
         painter.end()
