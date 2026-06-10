@@ -600,11 +600,11 @@ class TransportBar(QFrame):
         self._speed_spinner.setText(self._spinner_frames[self._spinner_idx])
 
     def set_speed(self, rate: float):
-        """Move the speed slider to match a given rate (0.5–2.0) without re-emitting."""
-        self._speed_slider.blockSignals(True)
-        self._speed_slider.setValue(int(round(rate * 100)))
+        """Update the speed display to match a given rate without re-emitting."""
+        rate = max(0.25, min(4.0, rate))
         self._speed_val_lbl.setText(f"{int(round(rate * 100))}%")
-        self._speed_slider.blockSignals(False)
+        self._speed_down_btn.setEnabled(rate > 0.25)
+        self._speed_up_btn.setEnabled(rate < 4.0)
 
     @Slot()
     def show_speed_busy(self):
