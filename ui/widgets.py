@@ -62,8 +62,8 @@ class InlineEditLabel(QWidget):
         self._edit.returnPressed.connect(self._commit)
         self._edit.installEventFilter(self)
 
-        # Click on label to start editing
-        self._label.mousePressEvent = lambda e: self._start_edit()
+        # Click on label to start editing; forward the event so we can use its position.
+        self._label.mousePressEvent = self._on_label_click
 
     # ------------------------------------------------------------------ API
 
@@ -83,12 +83,25 @@ class InlineEditLabel(QWidget):
 
     # ------------------------------------------------------------------ internal
 
-    def _start_edit(self):
+    def _on_label_click(self, event):
+        """Start editing and place the cursor at the clicked character position."""
+        click_x = event.position().x()
+        self._start_edit(click_x=click_x)
+
+    def _start_edit(self, click_x: float = None):
         self._edit.setText(self._current)
-        self._edit.selectAll()
+        # Switch to the edit widget first so it has a real geometry.
         self._stack.setCurrentIndex(1)
         self._editing = True
         self._edit.setFocus()
+
+        # Position cursor at the clicked character, falling back to end-of-text.
+        if click_x is not None:
+            from PySide6.QtCore import QPoint
+            pos = self._edit.cursorPositionAt(QPoint(int(click_x), self._edit.height() // 2))
+            self._edit.setCursorPosition(pos)
+        else:
+            self._edit.setCursorPosition(len(self._current))
 
     def _commit(self):
         if not self._editing:
