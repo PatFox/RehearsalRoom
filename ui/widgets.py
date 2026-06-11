@@ -4,9 +4,118 @@ import math
 import random
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, QRect, QPointF, QRectF
+from PySide6.QtCore import Qt, Signal, QRect, QPointF, QRectF, QEvent
 from PySide6.QtGui import QPainter, QColor, QPainterPath, QLinearGradient, QBrush, QPen, QFont
-from PySide6.QtWidgets import QWidget, QSizePolicy
+from PySide6.QtWidgets import (
+    QWidget, QSizePolicy, QLabel, QLineEdit, QStackedLayout, QApplication
+)
+
+
+# ---------------------------------------------------------------------------
+# InlineEditLabel — a label that becomes an editable field on click
+# ---------------------------------------------------------------------------
+
+class InlineEditLabel(QWidget):
+    """Displays as a QLabel; clicking activates an inline QLineEdit.
+
+    Keyboard behaviour:
+      Enter / Return  → commit the new value and revert to label
+      Escape          → discard changes and revert to label
+      Focus lost      → commit (same as Enter)
+
+    Signals:
+      committed(str)  → emitted when a new value is saved
+    """
+    committed = Signal(str)
+
+    def __init__(self, text: str = "", label_style: str = "",
+                 edit_style: str = "", placeholder: str = "", parent=None):
+        super().__init__(parent)
+        self._current = text
+        self._editing = False
+
+        # Use a stacked layout so only the active widget consumes space.
+        stack = QStackedLayout(self)
+        stack.setContentsMargins(0, 0, 0, 0)
+        self._stack = stack
+
+        self._label = QLabel(text)
+        if label_style:
+            self._label.setStyleSheet(label_style)
+        self._label.setCursor(Qt.CursorShape.IBeamCursor)
+        self._label.setToolTip("Click to edit")
+
+        self._edit = QLineEdit(text)
+        if edit_style:
+            self._edit.setStyleSheet(edit_style)
+        elif label_style:
+            # Derive edit style from label style — keep font, remove colour extras
+            self._edit.setStyleSheet(label_style)
+        if placeholder:
+            self._edit.setPlaceholderText(placeholder)
+
+        stack.addWidget(self._label)   # index 0
+        stack.addWidget(self._edit)    # index 1
+        stack.setCurrentIndex(0)
+
+        # Wire up editing events
+        self._edit.returnPressed.connect(self._commit)
+        self._edit.installEventFilter(self)
+
+        # Click on label to start editing
+        self._label.mousePressEvent = lambda e: self._start_edit()
+
+    # ------------------------------------------------------------------ API
+
+    def text(self) -> str:
+        return self._current
+
+    def setText(self, text: str):
+        self._current = text
+        self._label.setText(text)
+        if not self._editing:
+            self._edit.setText(text)
+
+    def setStyleSheet(self, style: str):
+        """Forward style to both inner widgets."""
+        self._label.setStyleSheet(style)
+        self._edit.setStyleSheet(style)
+
+    # ------------------------------------------------------------------ internal
+
+    def _start_edit(self):
+        self._edit.setText(self._current)
+        self._edit.selectAll()
+        self._stack.setCurrentIndex(1)
+        self._editing = True
+        self._edit.setFocus()
+
+    def _commit(self):
+        if not self._editing:
+            return
+        new_val = self._edit.text().strip()
+        if not new_val:
+            new_val = self._current   # don't allow blanking out
+        self._current = new_val
+        self._label.setText(new_val)
+        self._stack.setCurrentIndex(0)
+        self._editing = False
+        self.committed.emit(new_val)
+
+    def _cancel(self):
+        self._edit.setText(self._current)
+        self._stack.setCurrentIndex(0)
+        self._editing = False
+
+    def eventFilter(self, obj, event):
+        if obj is self._edit:
+            if event.type() == QEvent.Type.FocusOut:
+                self._commit()
+            elif event.type() == QEvent.Type.KeyPress:
+                if event.key() == Qt.Key.Key_Escape:
+                    self._cancel()
+                    return True
+        return super().eventFilter(obj, event)
 
 
 # ---------------------------------------------------------------------------

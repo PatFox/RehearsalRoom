@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.theme import Theme, STEM_IDS, STEM_LABELS
-from ui.widgets import WaveformWidget, WaveformScrollBar, ArtThumbnail, gen_waveform
+from ui.widgets import WaveformWidget, WaveformScrollBar, ArtThumbnail, gen_waveform, InlineEditLabel
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +289,7 @@ class StemLane(QFrame):
     handle_moved        = Signal(str, float)
     zoom_scroll_changed = Signal(float, float)   # zoom, scroll_frac
     loop_cleared        = Signal()
+    label_changed       = Signal(str, str)        # stem_id, new_label
 
     LANE_HEIGHT = 116
 
@@ -325,8 +326,15 @@ class StemLane(QFrame):
         bar.setStyleSheet(f"background: {color}; border-radius: 2px;")
         name_col = QVBoxLayout()
         name_col.setSpacing(2)
-        self._name_lbl = QLabel(label)
-        self._name_lbl.setStyleSheet("font-size: 14px; font-weight: 600;")
+        self._name_lbl = InlineEditLabel(
+            label,
+            label_style="font-size: 14px; font-weight: 600; background: transparent; border: none;",
+            edit_style=(
+                "font-size: 14px; font-weight: 600; background: transparent;"
+                " border: none; border-bottom: 1px solid #2E6BFF; padding: 0px;"
+            ),
+        )
+        self._name_lbl.committed.connect(lambda v: self.label_changed.emit(self._id, v))
         file_lbl = QLabel(f"{self._id}.flac")
         file_lbl.setStyleSheet(f"font-family: 'Consolas', monospace; font-size: 10px; color: {self._theme.ink3};")
         name_col.addWidget(self._name_lbl)
@@ -380,8 +388,9 @@ class StemLane(QFrame):
             effect.setOpacity(0.38)
             self.setGraphicsEffect(effect)
         self._wave.set_muted(not audible)
-        self._name_lbl.setStyleSheet(
-            f"font-size: 14px; font-weight: 600; color: {'#93939C' if not audible else self._theme.ink};"
+        color = "#93939C" if not audible else self._theme.ink
+        self._name_lbl._label.setStyleSheet(
+            f"font-size: 14px; font-weight: 600; background: transparent; border: none; color: {color};"
         )
 
     def update_name(self, name: str):
@@ -970,10 +979,26 @@ class PlayerPanel(QWidget):
 
         meta_col = QVBoxLayout()
         meta_col.setSpacing(2)
-        self._title_lbl = QLabel("—")
-        self._title_lbl.setStyleSheet("font-size: 16px; font-weight: 600;")
-        self._artist_lbl = QLabel("")
-        self._artist_lbl.setStyleSheet(f"font-size: 12px; color: {self._theme.ink3};")
+        self._title_lbl = InlineEditLabel(
+            "—",
+            label_style="font-size: 16px; font-weight: 600; background: transparent; border: none;",
+            edit_style=(
+                "font-size: 16px; font-weight: 600; background: transparent;"
+                " border: none; border-bottom: 1px solid #2E6BFF; padding: 0px;"
+            ),
+            placeholder="Track title",
+        )
+        self._title_lbl.committed.connect(self._on_title_committed)
+        self._artist_lbl = InlineEditLabel(
+            "",
+            label_style=f"font-size: 12px; color: {self._theme.ink3}; background: transparent; border: none;",
+            edit_style=(
+                f"font-size: 12px; color: {self._theme.ink3}; background: transparent;"
+                f" border: none; border-bottom: 1px solid #2E6BFF; padding: 0px;"
+            ),
+            placeholder="Artist name",
+        )
+        self._artist_lbl.committed.connect(self._on_artist_committed)
         self._yt_link_lbl = QLabel("")
         self._yt_link_lbl.setStyleSheet(f"font-size: 11px; color: {self._theme.ink3};")
         self._yt_link_lbl.setOpenExternalLinks(True)
@@ -1002,12 +1027,6 @@ class PlayerPanel(QWidget):
             w.setLayout(col)
             chips_row.addWidget(w)
         top_lay.addLayout(chips_row)
-
-        self._edit_btn = QPushButton("Edit")
-        self._edit_btn.setProperty("role", "outline")
-        self._edit_btn.setFixedHeight(34)
-        self._edit_btn.clicked.connect(self._open_meta_dialog)
-        top_lay.addWidget(self._edit_btn)
 
         self._export_btn = QPushButton("Export")
         self._export_btn.setProperty("role", "ghost")
@@ -1211,6 +1230,7 @@ class PlayerPanel(QWidget):
             lane.loop_cleared.connect(self._clear_loop)
             lane.handle_moved.connect(self._on_handle_moved)
             lane.zoom_scroll_changed.connect(self._on_zoom_scroll)
+            lane.label_changed.connect(self._on_stem_label_committed)
             self._lanes_lay.insertWidget(self._lanes_lay.count() - 1, lane)
             self._lanes[sid] = lane
             self._stem_labels[sid] = slbl
@@ -1423,6 +1443,18 @@ class PlayerPanel(QWidget):
     # ------------------------------------------------------------------
     # Metadata dialog
     # ------------------------------------------------------------------
+
+    def _on_title_committed(self, value: str):
+        self._apply_meta({"title": value, "artist": self._artist_lbl.text(),
+                          "stem_labels": dict(self._stem_labels)})
+
+    def _on_artist_committed(self, value: str):
+        self._apply_meta({"title": self._title_lbl.text(), "artist": value,
+                          "stem_labels": dict(self._stem_labels)})
+
+    def _on_stem_label_committed(self, stem_id: str, value: str):
+        self._apply_meta({"title": self._title_lbl.text(), "artist": self._artist_lbl.text(),
+                          "stem_labels": {**self._stem_labels, stem_id: value}})
 
     def _open_meta_dialog(self):
         if not self._song:
