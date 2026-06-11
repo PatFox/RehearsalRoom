@@ -103,6 +103,67 @@ class _ErrorDialog(QDialog):
         """)
 
 
+class _UpToDateDialog(QDialog):
+    def __init__(self, current: str, theme: Theme, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Up to date")
+        self.setFixedWidth(360)
+        self.setModal(True)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 22)
+        lay.setSpacing(12)
+
+        title = QLabel("You're up to date  ✓")
+        title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        lay.addWidget(title)
+
+        body = QLabel(f"Rehearsal Room <b>v{current}</b> is the latest version.")
+        body.setWordWrap(True)
+        body.setStyleSheet(f"font-size: 13px; color: {theme.ink2};")
+        lay.addWidget(body)
+
+        btn = QPushButton("Close")
+        btn.setProperty("role", "ghost")
+        btn.setFixedHeight(36)
+        btn.clicked.connect(self.accept)
+        lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignRight)
+
+
+class _UpdateAvailableDialog(QDialog):
+    def __init__(self, current: str, latest: str, url: str, theme: Theme, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Update available")
+        self.setFixedWidth(400)
+        self.setModal(True)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 22)
+        lay.setSpacing(12)
+
+        title = QLabel("Update available")
+        title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        lay.addWidget(title)
+
+        body = QLabel(
+            f"A new version of Rehearsal Room is available.<br><br>"
+            f"<b>Current:</b>  v{current}<br>"
+            f"<b>Latest:</b>   v{latest}"
+        )
+        body.setWordWrap(True)
+        body.setStyleSheet(f"font-size: 13px; color: {theme.ink2};")
+        lay.addWidget(body)
+
+        link = QLabel(f'<a href="{url}" style="color: #2E6BFF;">View release on GitHub</a>')
+        link.setOpenExternalLinks(True)
+        link.setStyleSheet("font-size: 13px;")
+        lay.addWidget(link)
+
+        btn = QPushButton("Close")
+        btn.setProperty("role", "ghost")
+        btn.setFixedHeight(36)
+        btn.clicked.connect(self.accept)
+        lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignRight)
+
+
 class AboutDialog(QDialog):
     def __init__(self, theme: Theme, parent=None):
         super().__init__(parent)
@@ -131,7 +192,8 @@ class AboutDialog(QDialog):
         title_col.setSpacing(2)
         name_lbl = QLabel("Rehearsal Room")
         name_lbl.setStyleSheet("font-size: 18px; font-weight: 700; letter-spacing: -0.02em;")
-        ver_lbl = QLabel("Version 1.0.0")
+        from core.version import __version__
+        ver_lbl = QLabel(f"Version {__version__}")
         ver_lbl.setStyleSheet(f"font-size: 12px; color: {theme.ink3};")
         title_col.addWidget(name_lbl)
         title_col.addWidget(ver_lbl)
@@ -680,11 +742,22 @@ class MainWindow(QMainWindow):
             QMenu::item:selected {{
                 background: {t.surface2};
             }}
+            QMenu::separator {{
+                height: 1px;
+                background: {t.border};
+                margin: 4px 8px;
+            }}
         """)
 
         settings_action = QAction("Settings", self)
         settings_action.triggered.connect(self._open_settings)
         menu.addAction(settings_action)
+
+        check_action = QAction("Check for updates…", self)
+        check_action.triggered.connect(self._check_for_updates)
+        menu.addAction(check_action)
+
+        menu.addSeparator()
 
         about_action = QAction("About", self)
         about_action.triggered.connect(self._open_about)
@@ -700,6 +773,32 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self._theme, self)
         dlg.library_changed.connect(lambda _: self._load_library())
         dlg.exec()
+
+    def _check_for_updates(self):
+        from core.version import __version__, GITHUB_REPO
+        from core.updater import UpdateChecker, _parse_version
+
+        # Disable the button while checking to prevent double-clicks
+        self._more_btn.setEnabled(False)
+
+        self._update_checker = UpdateChecker(GITHUB_REPO, parent=self)
+
+        def on_result(latest: str, url: str):
+            self._more_btn.setEnabled(True)
+            current_t = _parse_version(__version__)
+            latest_t  = _parse_version(latest)
+            if latest_t > current_t:
+                _UpdateAvailableDialog(__version__, latest, url, self._theme, self).exec()
+            else:
+                _UpToDateDialog(__version__, self._theme, self).exec()
+
+        def on_error(msg: str):
+            self._more_btn.setEnabled(True)
+            _ErrorDialog(f"Update check failed:\n\n{msg}", self).exec()
+
+        self._update_checker.result.connect(on_result)
+        self._update_checker.error.connect(on_error)
+        self._update_checker.start()
 
     def _open_about(self):
         AboutDialog(self._theme, self).exec()

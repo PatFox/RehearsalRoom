@@ -82,6 +82,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM ── Stamp version into core/version.py ───────────────────────────────
+echo.
+echo Stamping version v%VERSION% into core\version.py...
+powershell -NoProfile -Command ^
+    "(Get-Content core\version.py) -replace '__version__ = \"[^\"]*\"', '__version__ = \"%VERSION%\"' | Set-Content core\version.py"
+
 REM ── Build ─────────────────────────────────────────────────────────────
 echo.
 echo [1/3] Building executable and installer...
