@@ -1,11 +1,11 @@
 """Main window — sidebar + stacked content area (library / player)."""
 
 from PySide6.QtCore import Qt, Signal, QObject, QEvent
-from PySide6.QtGui import QColor, QPalette, QFont
+from PySide6.QtGui import QColor, QPalette, QFont, QAction
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QPushButton, QFrame, QLineEdit, QStackedWidget,
-    QSizePolicy, QDialog, QMenu, QAction
+    QSizePolicy, QDialog, QMenu
 )
 
 from ui.theme import Theme, STEM_IDS
