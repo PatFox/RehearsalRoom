@@ -5,7 +5,7 @@ from PySide6.QtGui import QColor, QPalette, QFont
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QPushButton, QFrame, QLineEdit, QStackedWidget,
-    QSizePolicy, QDialog
+    QSizePolicy, QDialog, QMenu, QAction
 )
 
 from ui.theme import Theme, STEM_IDS
@@ -101,6 +101,71 @@ class _ErrorDialog(QDialog):
                 padding: 12px;
             }
         """)
+
+
+class AboutDialog(QDialog):
+    def __init__(self, theme: Theme, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("About Rehearsal Room")
+        self.setFixedWidth(440)
+        self.setModal(True)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(28, 26, 28, 24)
+        lay.setSpacing(14)
+
+        # Header row: mark + name
+        header = QHBoxLayout()
+        header.setSpacing(14)
+        mark = QFrame()
+        mark.setFixedSize(44, 44)
+        mark.setStyleSheet("background: #17171B; border-radius: 12px;")
+        mark_lbl = QLabel("〜")
+        mark_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mark_lbl.setStyleSheet("color: white; font-size: 16px; background: transparent;")
+        from PySide6.QtWidgets import QHBoxLayout as _HBL
+        mark_lay = _HBL(mark)
+        mark_lay.setContentsMargins(0, 0, 0, 0)
+        mark_lay.addWidget(mark_lbl)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(2)
+        name_lbl = QLabel("Rehearsal Room")
+        name_lbl.setStyleSheet("font-size: 18px; font-weight: 700; letter-spacing: -0.02em;")
+        ver_lbl = QLabel("Version 1.0.0")
+        ver_lbl.setStyleSheet(f"font-size: 12px; color: {theme.ink3};")
+        title_col.addWidget(name_lbl)
+        title_col.addWidget(ver_lbl)
+
+        header.addWidget(mark)
+        header.addLayout(title_col)
+        header.addStretch()
+        lay.addLayout(header)
+
+        div = QFrame()
+        div.setFrameShape(QFrame.Shape.HLine)
+        div.setStyleSheet(f"color: {theme.border};")
+        lay.addWidget(div)
+
+        body = QLabel(
+            "Rehearsal Room is a music practice tool for musicians who want to "
+            "slow down, loop, and isolate individual stems from any song.\n\n"
+            "Import any audio file or paste a YouTube URL — Rehearsal Room uses "
+            "AI-powered source separation (Demucs) to split the track into "
+            "vocals, drums, bass, and other instruments, each with its own "
+            "volume fader and waveform display.\n\n"
+            "Built with Python, PySide6, and a lot of ☕."
+        )
+        body.setWordWrap(True)
+        body.setStyleSheet(f"font-size: 13px; color: {theme.ink2}; line-height: 1.5;")
+        lay.addWidget(body)
+
+        lay.addSpacing(4)
+
+        close_btn = QPushButton("Close")
+        close_btn.setProperty("role", "ghost")
+        close_btn.setFixedHeight(36)
+        close_btn.clicked.connect(self.accept)
+        lay.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignRight)
 
 
 class SidebarButton(QPushButton):
@@ -376,12 +441,15 @@ class MainWindow(QMainWindow):
         self._search.textChanged.connect(self._on_search)
         tb_lay.addWidget(self._search)
 
-        settings_btn = QPushButton("⚙")
-        settings_btn.setProperty("role", "icon")
-        settings_btn.setFixedSize(36, 36)
-        settings_btn.setToolTip("Settings")
-        settings_btn.clicked.connect(self._open_settings)
-        tb_lay.addWidget(settings_btn)
+        self._more_btn = QPushButton("⋮")
+        self._more_btn.setProperty("role", "icon")
+        self._more_btn.setFixedSize(36, 36)
+        self._more_btn.setToolTip("More options")
+        self._more_btn.setStyleSheet(
+            "QPushButton { font-size: 20px; font-weight: 700; letter-spacing: 0; }"
+        )
+        self._more_btn.clicked.connect(self._show_more_menu)
+        tb_lay.addWidget(self._more_btn)
 
 
         main_lay.addWidget(self._topbar)
@@ -593,10 +661,48 @@ class MainWindow(QMainWindow):
         self._sidebar.update_count(n)
         self._sidebar.refresh_storage(S.library_path(), n)
 
+    def _show_more_menu(self):
+        t = self._theme
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background: {t.surface};
+                border: 1px solid {t.border};
+                border-radius: 10px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 8px 18px 8px 12px;
+                font-size: 13px;
+                color: {t.ink};
+                border-radius: 6px;
+            }}
+            QMenu::item:selected {{
+                background: {t.surface2};
+            }}
+        """)
+
+        settings_action = QAction("Settings", self)
+        settings_action.triggered.connect(self._open_settings)
+        menu.addAction(settings_action)
+
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self._open_about)
+        menu.addAction(about_action)
+
+        # Align menu's top-right corner to button's bottom-right corner.
+        from PySide6.QtCore import QPoint
+        btn_rect = self._more_btn.rect()
+        pos = self._more_btn.mapToGlobal(btn_rect.bottomRight())
+        menu.exec(QPoint(pos.x() - menu.sizeHint().width(), pos.y() + 4))
+
     def _open_settings(self):
         dlg = SettingsDialog(self._theme, self)
         dlg.library_changed.connect(lambda _: self._load_library())
         dlg.exec()
+
+    def _open_about(self):
+        AboutDialog(self._theme, self).exec()
 
     # ------------------------------------------------------------------
     # Metadata save
