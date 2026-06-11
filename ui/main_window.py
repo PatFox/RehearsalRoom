@@ -202,11 +202,28 @@ class Sidebar(QFrame):
         stor_lay = QVBoxLayout(storage)
         stor_lay.setContentsMargins(11, 10, 11, 10)
         stor_lay.setSpacing(3)
+
+        stor_header = QHBoxLayout()
+        stor_header.setContentsMargins(0, 0, 0, 0)
+        stor_header.setSpacing(6)
         stor_top = QLabel("Library storage")
         stor_top.setStyleSheet("font-size: 11px; font-weight: 500;")
+        stor_header.addWidget(stor_top, 1)
+
+        self._open_dir_btn = QPushButton("↗")
+        self._open_dir_btn.setFixedSize(18, 18)
+        self._open_dir_btn.setToolTip("Open library folder")
+        self._open_dir_btn.setStyleSheet(
+            "QPushButton { border: none; background: transparent; "
+            "font-size: 11px; color: #93939C; padding: 0; }"
+            "QPushButton:hover { color: #FFFFFF; }"
+        )
+        self._open_dir_btn.clicked.connect(self._open_library_dir)
+        stor_header.addWidget(self._open_dir_btn)
+
         self._stor_lbl = QLabel("")
         self._stor_lbl.setStyleSheet("font-size: 11px; color: #93939C;")
-        stor_lay.addWidget(stor_top)
+        stor_lay.addLayout(stor_header)
         stor_lay.addWidget(self._stor_lbl)
         lay.addWidget(storage)
 
@@ -222,6 +239,20 @@ class Sidebar(QFrame):
         from core.library_stats import library_total_bytes, fmt_size
         total = library_total_bytes(library_path)
         self._stor_lbl.setText(f"{fmt_size(total)} · {n_tracks} track{'s' if n_tracks != 1 else ''}")
+        self._library_path = str(library_path)
+
+    def _open_library_dir(self):
+        import os, subprocess, sys
+        path = getattr(self, "_library_path", "")
+        if not path:
+            from core import settings as S
+            path = str(S.library_path())
+        if sys.platform == "win32":
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
 
     def _apply_theme(self):
         t = self._theme
