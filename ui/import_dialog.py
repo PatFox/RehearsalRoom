@@ -6,7 +6,7 @@ from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QFrame, QWidget, QFileDialog, QStackedWidget,
-    QSizePolicy, QProgressBar, QMessageBox
+    QSizePolicy, QProgressBar, QMessageBox, QScrollArea
 )
 
 from ui.theme import Theme, STEM_IDS, STEM_LABELS
