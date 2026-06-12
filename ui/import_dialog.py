@@ -76,7 +76,7 @@ class DropZone(QFrame):
         lay = QVBoxLayout(self)
         lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.setSpacing(8)
-        lay.setContentsMargins(24, 42, 24, 42)
+        lay.setContentsMargins(24, 22, 24, 22)
 
         self._title = QLabel("Drop an audio file here")
         self._title.setStyleSheet("font-size: 15px; font-weight: 600;")
@@ -397,7 +397,7 @@ class ImportDialog(QDialog):
         self._stack.addWidget(yt_w)
 
         lay.addWidget(self._stack)
-        lay.addSpacing(16)
+        lay.addSpacing(10)
 
         # model options
         opts_row = QHBoxLayout()
@@ -416,7 +416,7 @@ class ImportDialog(QDialog):
         opts_row.addWidget(self._opt_ft)
         lay.addLayout(opts_row)
         self._select_model("htdemucs")
-        lay.addSpacing(18)
+        lay.addSpacing(12)
 
         # footer
         foot = QHBoxLayout()
