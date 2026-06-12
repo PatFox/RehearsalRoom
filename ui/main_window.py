@@ -296,7 +296,7 @@ class SidebarButton(QPushButton):
         self._refresh()
 
     def _refresh(self):
-        text = f"{self._icon}  {self._label}"
+        text = self._label
         if self._count >= 0:
             text += f"   {self._count}"
         self.setText(text)
