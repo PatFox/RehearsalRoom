@@ -255,6 +255,108 @@ class SongRow(QFrame):
         )
 
 
+class ArtistGroupHeader(QWidget):
+    """Divider shown above each artist group in the 'By artist' view."""
+
+    def __init__(self, artist: str, count: int, theme: Theme, parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 16, 12, 6)
+        lay.setSpacing(8)
+
+        name_lbl = QLabel(artist or "Unknown artist")
+        name_lbl.setStyleSheet(
+            f"font-size: 13px; font-weight: 700; color: {theme.ink};"
+        )
+        count_lbl = QLabel(f"{count} {'track' if count == 1 else 'tracks'}")
+        count_lbl.setStyleSheet(
+            f"font-family: 'Consolas', monospace; font-size: 11px; color: {theme.ink3};"
+        )
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {theme.border};")
+
+        lay.addWidget(name_lbl)
+        lay.addWidget(count_lbl)
+        lay.addWidget(sep, 1)
+
+
+class SongRowNoArtist(SongRow):
+    """SongRow with the artist label omitted (used in the artist-grouped view)."""
+
+    def _setup_ui(self):
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(10)
+        s = self._song
+
+        # star
+        self._star_btn = QPushButton()
+        self._star_btn.setFixedSize(24, 24)
+        self._star_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._star_btn.setFlat(True)
+        self._star_btn.clicked.connect(self._on_star_clicked)
+        self._update_star()
+        lay.addWidget(self._star_btn)
+
+        # artwork
+        self._art = ArtThumbnail(s["grad"][0], s["grad"][1], s.get("seed", 1), 44)
+        lay.addWidget(self._art)
+
+        # title (takes all the space the artist column used to share)
+        self._title_lbl = QLabel(s["title"])
+        self._title_lbl.setStyleSheet("font-size: 14px; font-weight: 600;")
+        self._title_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        lay.addWidget(self._title_lbl, 2)
+
+        # keep a hidden stub so parent helper methods that reference _artist_lbl don't crash
+        self._artist_lbl = QLabel("")
+        self._artist_lbl.hide()
+
+        # duration
+        ms   = s.get("durationMs", 0)
+        secs = ms // 1000
+        dur_lbl = QLabel(f"{secs // 60}:{secs % 60:02d}")
+        dur_lbl.setStyleSheet("font-family: 'Consolas', monospace; font-size: 13px;")
+        dur_lbl.setFixedWidth(64)
+        dur_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(dur_lbl)
+
+        # file size
+        size_lbl = QLabel(_fmt_size(s.get("file_size", 0)))
+        size_lbl.setStyleSheet(f"font-size: 12px; color: {self._theme.ink3};")
+        size_lbl.setFixedWidth(72)
+        size_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(size_lbl)
+
+        # last played
+        viewed_lbl = QLabel(_fmt_viewed(s.get("last_viewed")))
+        viewed_lbl.setStyleSheet(f"font-size: 12px; color: {self._theme.ink3};")
+        viewed_lbl.setFixedWidth(104)
+        viewed_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(viewed_lbl)
+
+        # added
+        added_lbl = QLabel(s.get("addedLabel", ""))
+        added_lbl.setStyleSheet("font-size: 12px;")
+        added_lbl.setFixedWidth(96)
+        added_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(added_lbl)
+
+        # three-dot context menu button
+        self._more_btn = QPushButton("⋮")
+        self._more_btn.setFixedSize(28, 28)
+        self._more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._more_btn.setToolTip("More options")
+        self._more_btn.clicked.connect(self._show_row_menu)
+        self._more_btn.setStyleSheet(
+            "QPushButton { border: none; background: transparent; "
+            "font-size: 18px; font-weight: 700; color: transparent; padding: 0; border-radius: 6px; }"
+            "QPushButton:hover { background: rgba(0,0,0,0.08); color: #666; }"
+        )
+        lay.addWidget(self._more_btn)
+
+
 class LibraryPanel(QWidget):
     song_opened       = Signal(dict)
     import_requested  = Signal()
@@ -291,8 +393,15 @@ class LibraryPanel(QWidget):
 
     def set_nav_filter(self, nav_filter: str):
         self._nav_filter = nav_filter
-        titles = {"fav": "Favourites", "recent": "Recently played", "all": "All tracks"}
+        titles = {
+            "fav":    "Favourites",
+            "recent": "Recently played",
+            "all":    "All tracks",
+            "artist": "By artist",
+        }
         self._head_lbl.setText(titles.get(nav_filter, "All tracks"))
+        # Hide sort headers in artist view (grouped by artist, no sort)
+        self._col_head_w.setVisible(nav_filter != "artist")
         self._rebuild_rows()
 
     def filter(self, query: str):
@@ -410,6 +519,16 @@ class LibraryPanel(QWidget):
         self._empty_recent.hide()
         cl.addWidget(self._empty_recent, 0, Qt.AlignmentFlag.AlignCenter)
 
+        # empty: no matches in artist view
+        self._empty_artist = QWidget()
+        al = QVBoxLayout(self._empty_artist)
+        al.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        a1 = QLabel("No tracks found")
+        a1.setStyleSheet("font-size: 17px; font-weight: 600;")
+        al.addWidget(a1, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._empty_artist.hide()
+        cl.addWidget(self._empty_artist, 0, Qt.AlignmentFlag.AlignCenter)
+
         # empty: no favourites
         self._empty_fav = QWidget()
         fl = QVBoxLayout(self._empty_fav)
@@ -456,7 +575,14 @@ class LibraryPanel(QWidget):
 
     def _visible_songs(self) -> list[dict]:
         songs = self._songs
-        if self._nav_filter == "fav":
+        if self._nav_filter == "artist":
+            if self._search_query:
+                q = self._search_query.lower()
+                songs = [s for s in songs if
+                         q in (s.get("title") or "").lower() or
+                         q in (s.get("artist") or "").lower()]
+            return songs   # grouping/sorting handled in _rebuild_rows_by_artist
+        elif self._nav_filter == "fav":
             songs = [s for s in songs if s["id"] in self._favourites]
         elif self._nav_filter == "recent":
             viewed = self._last_viewed
@@ -477,9 +603,11 @@ class LibraryPanel(QWidget):
         return self._sorted(songs)
 
     def _rebuild_rows(self):
-        for row in self._rows:
-            self._rows_lay.removeWidget(row)
-            row.deleteLater()
+        # Remove all existing row widgets (and any artist group headers)
+        while self._rows_lay.count():
+            item = self._rows_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
         self._rows.clear()
 
         songs = self._visible_songs()
@@ -488,30 +616,65 @@ class LibraryPanel(QWidget):
         self._empty.hide()
         self._empty_recent.hide()
         self._empty_fav.hide()
+        self._empty_artist.hide()
 
         if not songs:
-            self._col_head_w.hide()
             self._sep.hide()
-            if self._nav_filter == "fav":
+            if self._nav_filter == "artist":
+                self._empty_artist.show()
+            elif self._nav_filter == "fav":
                 self._empty_fav.show()
             elif self._nav_filter == "recent":
                 self._empty_recent.show()
             else:
+                self._col_head_w.hide()
+                self._sep.hide()
                 self._empty.show()
             return
 
-        self._col_head_w.show()
         self._sep.show()
 
+        if self._nav_filter == "artist":
+            self._rebuild_rows_by_artist(songs)
+        else:
+            self._col_head_w.show()
+            for song in songs:
+                song = {**song, "last_viewed": self._last_viewed.get(song["id"])}
+                row = SongRow(song, self._theme, is_fav=song["id"] in self._favourites)
+                row.clicked.connect(self.song_opened)
+                row.favourite_toggled.connect(self.favourite_toggled)
+                row.delete_requested.connect(self.delete_requested)
+                self._rows_lay.addWidget(row)
+                self._rows.append(row)
+
+    def _rebuild_rows_by_artist(self, songs: list[dict]):
+        """Build the artist-grouped layout: artist header then track rows (no artist column)."""
+        # Group by artist name (case-insensitive key, display original)
+        from collections import defaultdict
+        groups: dict[str, list[dict]] = defaultdict(list)
+        order: list[str] = []
         for song in songs:
-            # Inject last_viewed so both the sort key and the row label can use it
-            song = {**song, "last_viewed": self._last_viewed.get(song["id"])}
-            row = SongRow(song, self._theme, is_fav=song["id"] in self._favourites)
-            row.clicked.connect(self.song_opened)
-            row.favourite_toggled.connect(self.favourite_toggled)
-            row.delete_requested.connect(self.delete_requested)
-            self._rows_lay.addWidget(row)
-            self._rows.append(row)
+            key = (song.get("artist") or "Unknown artist").strip()
+            norm = key.lower()
+            if norm not in [k.lower() for k in order]:
+                order.append(key)
+            # Find the canonical key already in groups (preserving first-seen capitalisation)
+            canon = next((k for k in groups if k.lower() == norm), key)
+            groups[canon].append(song)
+
+        for artist in sorted(order, key=str.lower):
+            canon = next((k for k in groups if k.lower() == artist.lower()), artist)
+            group_songs = groups[canon]
+            header = ArtistGroupHeader(canon, len(group_songs), self._theme)
+            self._rows_lay.addWidget(header)
+            for song in sorted(group_songs, key=lambda s: (s.get("title") or "").lower()):
+                song = {**song, "last_viewed": self._last_viewed.get(song["id"])}
+                row = SongRowNoArtist(song, self._theme, is_fav=song["id"] in self._favourites)
+                row.clicked.connect(self.song_opened)
+                row.favourite_toggled.connect(self.favourite_toggled)
+                row.delete_requested.connect(self.delete_requested)
+                self._rows_lay.addWidget(row)
+                self._rows.append(row)
 
     # ── theme ─────────────────────────────────────────────────────────────────
 

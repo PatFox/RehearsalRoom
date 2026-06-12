@@ -359,6 +359,7 @@ class Sidebar(QFrame):
             ("library", "⊞", "All tracks", song_count),
             ("recent",  "⏱", "Recent", -1),
             ("fav",     "☆", "Favorites", -1),
+            ("artist",  "♪", "By artist", -1),
         ]:
             btn = SidebarButton(icon, label, cnt)
             btn.clicked.connect(lambda checked, k=key: self._on_nav(k))
@@ -679,9 +680,14 @@ class MainWindow(QMainWindow):
 
     def _on_nav(self, key: str):
         self._go_library()
-        nav_names = {"library": "Library", "recent": "Recently played", "fav": "Favourites"}
+        nav_names = {
+            "library": "Library",
+            "recent":  "Recently played",
+            "fav":     "Favourites",
+            "artist":  "By artist",
+        }
         self._topbar_title.setText(nav_names.get(key, "Library"))
-        self._library.set_nav_filter(key if key in ("fav", "recent") else "all")
+        self._library.set_nav_filter(key if key in ("fav", "recent", "artist") else "all")
 
     def _on_search(self, text: str):
         self._library.filter(text)
