@@ -770,7 +770,9 @@ class MainWindow(QMainWindow):
 
         self._pending_job = None
         self._sidebar.finish_import_progress()
-        QTimer.singleShot(1200, lambda: self._open_song(new_song))
+        # Only auto-open the new track if the user is still in library view.
+        if self._stack.currentIndex() == 0:
+            QTimer.singleShot(1200, lambda: self._open_song(new_song))
 
     def _on_processing_complete(self):
         pass  # kept for compatibility; logic now in _on_separation_done
