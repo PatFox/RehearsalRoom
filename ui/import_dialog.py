@@ -197,19 +197,117 @@ class ModelOption(QFrame):
         self.selected.emit(self._key)
 
 
+# ---------------------------------------------------------------------------
+# _ItemListWidget — scrollable queue of labelled items with remove buttons
+# ---------------------------------------------------------------------------
+
+class _ItemListWidget(QWidget):
+    """Compact scrollable list of queued items; each row has a label + × button."""
+
+    def __init__(self, theme, parent=None):
+        super().__init__(parent)
+        self._theme = theme
+        self._items: list[tuple[str, str]] = []   # (key, label)
+        self._on_change: "callable | None" = None
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setMaximumHeight(108)
+        scroll.setStyleSheet("background: transparent;")
+
+        self._container = QWidget()
+        self._container.setStyleSheet("background: transparent;")
+        self._lay = QVBoxLayout(self._container)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(2)
+        self._lay.addStretch()
+
+        scroll.setWidget(self._container)
+        outer.addWidget(scroll)
+        self.hide()
+
+    def set_on_change(self, fn):
+        self._on_change = fn
+
+    def add(self, key: str, label: str):
+        if any(k == key for k, _ in self._items):
+            return   # deduplicate
+        self._items.append((key, label))
+        self._rebuild()
+
+    def remove(self, key: str):
+        self._items = [(k, l) for k, l in self._items if k != key]
+        self._rebuild()
+
+    def keys(self) -> list[str]:
+        return [k for k, _ in self._items]
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def _rebuild(self):
+        # Clear all rows except the trailing stretch
+        while self._lay.count() > 1:
+            item = self._lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        t = self._theme
+        for key, label in self._items:
+            row = QWidget()
+            row.setStyleSheet(f"background: {t.surface2}; border-radius: 6px;")
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(8, 4, 4, 4)
+            rl.setSpacing(6)
+
+            lbl = QLabel(label)
+            lbl.setStyleSheet(f"font-size: 12px; color: {t.ink};")
+            lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            lbl.setToolTip(key)
+
+            rm = QPushButton("×")
+            rm.setFixedSize(20, 20)
+            rm.setStyleSheet(
+                f"QPushButton {{ border: none; background: transparent; font-size: 14px; "
+                f"color: {t.ink3}; }}"
+                f"QPushButton:hover {{ color: #E53E3E; }}"
+            )
+            rm.clicked.connect(lambda _, k=key: (self.remove(k), self._on_change and self._on_change()))
+
+            rl.addWidget(lbl, 1)
+            rl.addWidget(rm)
+            self._lay.insertWidget(self._lay.count() - 1, row)
+
+        self.setVisible(len(self._items) > 0)
+        if self._on_change:
+            self._on_change()
+
+
+# ---------------------------------------------------------------------------
+# ImportDialog
+# ---------------------------------------------------------------------------
+
 class ImportDialog(QDialog):
-    import_started = Signal(dict)  # {kind, path_or_url, model}
+    import_started = Signal(list)   # list of job dicts
 
     def __init__(self, theme: Theme, parent=None):
         super().__init__(parent)
         self._theme = theme
         self._model = "htdemucs"
-        self._file_path: str = ""
-        self.setWindowTitle("Import a track")
+        self._file_paths: list[str] = []
+        self._yt_urls:    list[str] = []
+        self.setWindowTitle("Import tracks")
         self.setModal(True)
         self.setFixedWidth(540)
         self._setup_ui()
         self._apply_theme()
+
+    # ------------------------------------------------------------------ build
 
     def _setup_ui(self):
         lay = QVBoxLayout(self)
@@ -219,9 +317,9 @@ class ImportDialog(QDialog):
         # header
         head_row = QHBoxLayout()
         head_lay = QVBoxLayout()
-        title_lbl = QLabel("Import a track")
+        title_lbl = QLabel("Import tracks")
         title_lbl.setStyleSheet("font-size: 19px; font-weight: 600;")
-        sub_lbl = QLabel("Split any song into vocals, drums, bass and other.")
+        sub_lbl = QLabel("Split songs into vocals, drums, bass and other.")
         sub_lbl.setStyleSheet(f"font-size: 13px; color: {self._theme.ink3};")
         head_lay.addWidget(title_lbl)
         head_lay.addWidget(sub_lbl)
@@ -246,28 +344,56 @@ class ImportDialog(QDialog):
         # stacked content
         self._stack = QStackedWidget()
 
-        # -- file tab --
+        # ── file tab ──────────────────────────────────────────────────
         file_w = QWidget()
         file_lay = QVBoxLayout(file_w)
         file_lay.setContentsMargins(0, 0, 0, 0)
+        file_lay.setSpacing(6)
+
         self._dropzone = DropZone(self._theme)
-        self._dropzone.file_dropped.connect(self._on_file)
+        self._dropzone.file_dropped.connect(self._on_file_dropped)
         file_lay.addWidget(self._dropzone)
+
+        self._file_list = _ItemListWidget(self._theme)
+        self._file_list.set_on_change(self._update_start_btn)
+        file_lay.addWidget(self._file_list)
+
         self._stack.addWidget(file_w)
 
-        # -- youtube tab --
+        # ── youtube tab ───────────────────────────────────────────────
         yt_w = QWidget()
         yt_lay = QVBoxLayout(yt_w)
         yt_lay.setContentsMargins(0, 0, 0, 0)
+        yt_lay.setSpacing(6)
+
+        url_row = QHBoxLayout()
+        url_row.setSpacing(8)
         self._url_input = QLineEdit()
         self._url_input.setPlaceholderText("https://youtube.com/watch?v=…")
-        self._url_input.returnPressed.connect(self._on_start)
-        yt_lay.addWidget(self._url_input)
-        note = QLabel("Audio is downloaded at the highest available quality, then separated locally on your machine. Nothing is uploaded.")
+        self._url_input.returnPressed.connect(self._add_url)
+        url_row.addWidget(self._url_input, 1)
+        add_btn = QPushButton("Add")
+        add_btn.setProperty("role", "outline")
+        add_btn.setFixedHeight(34)
+        add_btn.clicked.connect(self._add_url)
+        url_row.addWidget(add_btn)
+        yt_lay.addLayout(url_row)
+
+        self._yt_list = _ItemListWidget(self._theme)
+        self._yt_list.set_on_change(self._update_start_btn)
+        yt_lay.addWidget(self._yt_list)
+
+        note = QLabel(
+            "Audio is downloaded at the highest available quality, "
+            "then separated locally. Nothing is uploaded."
+        )
         note.setWordWrap(True)
-        note.setStyleSheet(f"font-size: 12px; color: {self._theme.ink3}; margin-top: 8px; line-height: 1.5;")
+        note.setStyleSheet(
+            f"font-size: 12px; color: {self._theme.ink3}; margin-top: 4px;"
+        )
         yt_lay.addWidget(note)
         yt_lay.addStretch()
+
         self._stack.addWidget(yt_w)
 
         lay.addWidget(self._stack)
@@ -276,10 +402,14 @@ class ImportDialog(QDialog):
         # model options
         opts_row = QHBoxLayout()
         opts_row.setSpacing(12)
-        self._opt_balanced = ModelOption("htdemucs", "Balanced",
-                                         "htdemucs · fast, great for most tracks", self._theme)
-        self._opt_ft = ModelOption("htdemucs_ft", "Fine-tuned",
-                                   "htdemucs_ft · slower, cleaner separation", self._theme)
+        self._opt_balanced = ModelOption(
+            "htdemucs", "Balanced",
+            "htdemucs · fast, great for most tracks", self._theme
+        )
+        self._opt_ft = ModelOption(
+            "htdemucs_ft", "Fine-tuned",
+            "htdemucs_ft · slower, cleaner separation", self._theme
+        )
         self._opt_balanced.selected.connect(self._select_model)
         self._opt_ft.selected.connect(self._select_model)
         opts_row.addWidget(self._opt_balanced)
@@ -294,60 +424,101 @@ class ImportDialog(QDialog):
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setProperty("role", "ghost")
         cancel_btn.clicked.connect(self.reject)
-        self._start_btn = QPushButton("✦  Choose file & separate")
+        self._start_btn = QPushButton("✦  Choose files & separate")
         self._start_btn.setProperty("role", "primary")
+        self._start_btn.setEnabled(False)
         self._start_btn.clicked.connect(self._on_start)
         foot.addWidget(cancel_btn)
         foot.addWidget(self._start_btn)
         lay.addLayout(foot)
 
     def _apply_theme(self):
-        self.setStyleSheet(f"""
-            QDialog {{
-                background: {self._theme.surface};
-                border-radius: 22px;
-            }}
-        """)
+        self.setStyleSheet(
+            f"QDialog {{ background: {self._theme.surface}; border-radius: 22px; }}"
+        )
+
+    # ------------------------------------------------------------------ helpers
+
+    def _total_count(self) -> int:
+        return self._file_list.count() + self._yt_list.count()
+
+    def _update_start_btn(self):
+        n = self._total_count()
+        if n == 0:
+            tab = self._tabs.active()
+            if tab == "file":
+                self._start_btn.setText("✦  Choose files & separate")
+            else:
+                self._start_btn.setText("✦  Fetch & separate")
+            self._start_btn.setEnabled(False)
+        else:
+            label = f"Separate {n} track{'s' if n != 1 else ''}"
+            self._start_btn.setText(f"✦  {label}")
+            self._start_btn.setEnabled(True)
 
     def _switch_tab(self, key: str):
         self._stack.setCurrentIndex(0 if key == "file" else 1)
-        if key == "file":
-            self._start_btn.setText("✦  Choose file & separate")
-        else:
-            self._start_btn.setText("✦  Fetch & separate")
+        self._update_start_btn()
 
     def _select_model(self, key: str):
         self._model = key
         self._opt_balanced.set_selected(key == "htdemucs")
         self._opt_ft.set_selected(key == "htdemucs_ft")
 
-    def _on_file(self, path: str):
-        self._file_path = path
-        base = os.path.basename(path)
-        self._dropzone._title.setText(f"Selected: {base}")
-        self._start_btn.setText("✦  Separate stems")
+    # ------------------------------------------------------------------ input handlers
+
+    def _on_file_dropped(self, path: str):
+        label = os.path.basename(path)
+        self._file_list.add(path, label)
+
+    def _add_url(self):
+        url = self._url_input.text().strip()
+        if not url:
+            return
+        # Truncate display label for very long URLs
+        label = url if len(url) <= 60 else url[:57] + "…"
+        self._yt_list.add(url, label)
+        self._url_input.clear()
+
+    # ------------------------------------------------------------------ start
 
     def _on_start(self):
-        tab = self._tabs.active()
-        if tab == "file":
-            if not self._file_path:
-                path, _ = QFileDialog.getOpenFileName(
-                    self, "Open audio file", "",
-                    "Audio files (*.mp3 *.wav *.flac *.m4a *.ogg);;All files (*)"
-                )
-                if not path:
-                    return
-                self._file_path = path
-            self.import_started.emit({"kind": "file", "path": self._file_path,
-                                       "model": self._model,
-                                       "name": os.path.basename(self._file_path)})
-        else:
-            url = self._url_input.text().strip()
-            if not url:
+        # If file tab active and no files queued, open file picker first
+        if self._tabs.active() == "file" and self._file_list.count() == 0:
+            paths, _ = QFileDialog.getOpenFileNames(
+                self, "Open audio files", "",
+                "Audio files (*.mp3 *.wav *.flac *.m4a *.ogg);;All files (*)"
+            )
+            for p in paths:
+                self._file_list.add(p, os.path.basename(p))
+            if self._file_list.count() == 0:
                 return
-            self.import_started.emit({"kind": "youtube", "url": url,
-                                       "model": self._model, "name": ""})
-        self.accept()
+
+        # If YouTube tab active and no URLs queued, try adding current input
+        if self._tabs.active() == "youtube" and self._yt_list.count() == 0:
+            self._add_url()
+            if self._yt_list.count() == 0:
+                return
+
+        jobs: list[dict] = []
+        for path in self._file_list.keys():
+            jobs.append({
+                "kind":  "file",
+                "path":  path,
+                "model": self._model,
+                "name":  os.path.basename(path),
+            })
+        for url in self._yt_list.keys():
+            jobs.append({
+                "kind":  "youtube",
+                "url":   url,
+                "model": self._model,
+                "name":  "",
+            })
+
+        if jobs:
+            self.import_started.emit(jobs)
+            self.accept()
 
 
 # ---------------------------------------------------------------------------
@@ -360,11 +531,14 @@ class ImportProgressWidget(QFrame):
     Replaces the modal ProcessingDialog so the user can continue using
     the rest of the application during import.
     """
-    abort_requested = Signal()
+    abort_current = Signal()   # skip this track, continue queue
+    abort_all     = Signal()   # stop all remaining tracks
 
     def __init__(self, theme, parent=None):
         super().__init__(parent)
         self._theme = theme
+        self._current = 1
+        self._total   = 1
         self._setup_ui()
         self.hide()
 
@@ -451,15 +625,26 @@ class ImportProgressWidget(QFrame):
 
     # ------------------------------------------------------------------ API
 
-    def start(self, name: str):
+    def start(self, name: str, current: int = 1, total: int = 1):
         """Show the widget and reset to 0% for a new import."""
+        self._current = current
+        self._total   = total
         display = os.path.splitext(os.path.basename(name))[0] if name else "New track"
         self._track_lbl.setText(display)
         self._bar.setValue(0)
         self._pct_lbl.setText("0%")
         self._stage_lbl.setText("Initialising…")
         self._abort_btn.setEnabled(True)
+        self._update_header()
         self.show()
+
+    def _update_header(self):
+        if self._total > 1:
+            self._header_lbl.setText(
+                f"IMPORTING TRACK…  {self._current}/{self._total}"
+            )
+        else:
+            self._header_lbl.setText("IMPORTING TRACK…")
 
     def update_progress(self, pct: int, message: str = ""):
         self._bar.setValue(pct)
@@ -482,17 +667,43 @@ class ImportProgressWidget(QFrame):
     # ------------------------------------------------------------------ abort
 
     def _on_abort_clicked(self):
-        reply = QMessageBox.question(
-            self,
-            "Stop importing?",
-            "Are you sure you want to stop processing this track?\n\n"
-            "Any progress will be lost.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
+        # Build a 3-button dialog (QMessageBox supports custom buttons)
+        box = QMessageBox(self)
+        box.setWindowTitle("Stop importing?")
+        if self._total > 1:
+            remaining = self._total - self._current
+            box.setText(
+                f"Processing track {self._current} of {self._total}. "
+                f"What would you like to do?"
+            )
+            skip_btn  = box.addButton(
+                f"Skip this track  ({remaining} remaining)",
+                QMessageBox.ButtonRole.AcceptRole,
+            )
+            abort_btn = box.addButton(
+                "Abort all remaining tracks",
+                QMessageBox.ButtonRole.DestructiveRole,
+            )
+        else:
+            box.setText("Are you sure you want to stop processing this track?")
+            skip_btn  = None
+            abort_btn = box.addButton(
+                "Stop processing",
+                QMessageBox.ButtonRole.DestructiveRole,
+            )
+        keep_btn = box.addButton("Keep processing", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep_btn)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked == keep_btn or clicked is None:
+            return
+        if skip_btn and clicked == skip_btn:
+            self.abort_current.emit()
+        else:
+            # abort_btn — abort all (or only track when total==1)
             self.reset()
-            self.abort_requested.emit()
+            self.abort_all.emit()
 
 
 # ---------------------------------------------------------------------------

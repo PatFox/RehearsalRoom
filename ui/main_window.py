@@ -305,7 +305,8 @@ class SidebarButton(QPushButton):
 class Sidebar(QFrame):
     nav_changed    = Signal(str)
     import_clicked = Signal()
-    abort_import   = Signal()        # forwarded from ImportProgressWidget
+    abort_current  = Signal()   # skip this track, continue queue
+    abort_all      = Signal()   # stop all remaining tracks
 
     def __init__(self, theme: Theme, song_count: int = 0, parent=None):
         super().__init__(parent)
@@ -370,7 +371,8 @@ class Sidebar(QFrame):
 
         # import progress (hidden until an import is running)
         self._import_progress = ImportProgressWidget(self._theme)
-        self._import_progress.abort_requested.connect(self.abort_import)
+        self._import_progress.abort_current.connect(self.abort_current)
+        self._import_progress.abort_all.connect(self.abort_all)
         lay.addWidget(self._import_progress)
 
         # import CTA
@@ -413,8 +415,8 @@ class Sidebar(QFrame):
 
     # ── import progress helpers ───────────────────────────────────────────────
 
-    def show_import_progress(self, name: str):
-        self._import_progress.start(name)
+    def show_import_progress(self, name: str, current: int = 1, total: int = 1):
+        self._import_progress.start(name, current, total)
 
     def update_import_progress(self, pct: int, message: str = ""):
         self._import_progress.update_progress(pct, message)
@@ -527,6 +529,10 @@ class MainWindow(QMainWindow):
         self._dl_worker: DownloaderWorker | None = None
         self._proc_dlg: ProcessingDialog | None = None
         self._pending_job: dict | None = None
+        # Multi-track import queue
+        self._job_queue:  list[dict] = []
+        self._job_total:  int        = 0
+        self._last_imported_song: dict | None = None
 
         self._setup_ui()
         self._apply_theme()
@@ -548,7 +554,8 @@ class MainWindow(QMainWindow):
         self._sidebar = Sidebar(self._theme, len(self._songs))
         self._sidebar.nav_changed.connect(self._on_nav)
         self._sidebar.import_clicked.connect(self._open_import)
-        self._sidebar.abort_import.connect(self._cancel_job)
+        self._sidebar.abort_current.connect(self._cancel_current_job)
+        self._sidebar.abort_all.connect(self._cancel_all_jobs)
         root.addWidget(self._sidebar)
 
         # main content
@@ -683,13 +690,29 @@ class MainWindow(QMainWindow):
         dlg.import_started.connect(self._on_import_started)
         dlg.exec()
 
-    def _on_import_started(self, job: dict):
-        self._pending_job = job
-        self._proc_dlg = None   # no longer using the modal dialog
+    def _on_import_started(self, jobs: list):
+        self._job_queue = list(jobs)
+        self._job_total = len(jobs)
+        self._last_imported_song = None
+        self._proc_dlg = None
+        self._process_next_job()
 
-        # Show inline sidebar progress
+    def _process_next_job(self):
+        if not self._job_queue:
+            # All done — finish the progress widget then optionally open last track
+            self._sidebar.finish_import_progress()
+            if self._job_total == 1 and self._last_imported_song:
+                if self._stack.currentIndex() == 0:
+                    song = self._last_imported_song
+                    QTimer.singleShot(1200, lambda: self._open_song(song))
+            self._job_total = 0
+            return
+
+        job = self._job_queue.pop(0)
+        self._pending_job = job
+        current = self._job_total - len(self._job_queue)   # 1-based
         name = job.get("name", "") or job.get("url", "New track")
-        self._sidebar.show_import_progress(name)
+        self._sidebar.show_import_progress(name, current, self._job_total)
 
         if job["kind"] == "youtube":
             self._start_download(job)
@@ -728,7 +751,7 @@ class MainWindow(QMainWindow):
         acoustid_meta: dict = {}
         api_key = S.get("acoustid_api_key") or ""
         if api_key and not (tags.get("title") or yt.get("title")):
-            self._proc_dlg.update_progress(92, "Identifying song via AcoustID…")
+            self._sidebar.update_import_progress(92, "Identifying song via AcoustID…")
             audio_path = job.get("audio_path") or job.get("path", "")
             acoustid_meta = from_acoustid(Path(audio_path), api_key)
 
@@ -769,26 +792,36 @@ class MainWindow(QMainWindow):
         self._refresh_counts()
 
         self._pending_job = None
-        self._sidebar.finish_import_progress()
-        # Only auto-open the new track if the user is still in library view.
-        if self._stack.currentIndex() == 0:
-            QTimer.singleShot(1200, lambda: self._open_song(new_song))
+        self._last_imported_song = new_song
+        self._process_next_job()
 
     def _on_processing_complete(self):
-        pass  # kept for compatibility; logic now in _on_separation_done
+        pass  # kept for compatibility
 
-    def _cancel_job(self):
-        self._pending_job = None
+    def _stop_workers(self):
         if self._worker and self._worker.isRunning():
             self._worker.terminate()
         if self._dl_worker and self._dl_worker.isRunning():
             self._dl_worker.terminate()
+        self._pending_job = None
+
+    def _cancel_current_job(self):
+        """Skip the current track and continue with the rest of the queue."""
+        self._stop_workers()
+        self._process_next_job()
+
+    def _cancel_all_jobs(self):
+        """Abort all remaining tracks and hide the progress widget."""
+        self._stop_workers()
+        self._job_queue = []
+        self._job_total = 0
         self._sidebar.reset_import_progress()
 
     def _on_job_error(self, msg: str):
         self._pending_job = None
-        self._sidebar.reset_import_progress()
+        # Skip the failed track and continue with the rest
         _ErrorDialog(f"Processing failed:\n\n{msg}", self).exec()
+        self._process_next_job()
 
     # ------------------------------------------------------------------
     # Library scanning
