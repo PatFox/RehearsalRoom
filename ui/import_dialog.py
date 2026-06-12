@@ -1,4 +1,4 @@
-"""ImportDialog and ProcessingDialog — matches the design importflow.jsx."""
+"""ImportDialog, ImportProgressWidget, and ProcessingDialog."""
 
 import os
 from PySide6.QtCore import Qt, Signal, QTimer, QUrl, QMimeData
@@ -6,7 +6,7 @@ from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QFrame, QWidget, QFileDialog, QStackedWidget,
-    QSizePolicy, QProgressBar
+    QSizePolicy, QProgressBar, QMessageBox
 )
 
 from ui.theme import Theme, STEM_IDS, STEM_LABELS
@@ -348,6 +348,151 @@ class ImportDialog(QDialog):
             self.import_started.emit({"kind": "youtube", "url": url,
                                        "model": self._model, "name": ""})
         self.accept()
+
+
+# ---------------------------------------------------------------------------
+# ImportProgressWidget — compact sidebar panel shown during processing
+# ---------------------------------------------------------------------------
+
+class ImportProgressWidget(QFrame):
+    """Shown in the sidebar while a track is being imported/processed.
+
+    Replaces the modal ProcessingDialog so the user can continue using
+    the rest of the application during import.
+    """
+    abort_requested = Signal()
+
+    def __init__(self, theme, parent=None):
+        super().__init__(parent)
+        self._theme = theme
+        self._setup_ui()
+        self.hide()
+
+    def _setup_ui(self):
+        from ui.theme import Theme
+        t = self._theme
+        self.setStyleSheet(
+            f"QFrame {{ background: {t.surface2}; border-radius: 12px; border: none; }}"
+        )
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(5)
+
+        # Header row: "IMPORTING TRACK…" + abort button
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(4)
+
+        self._header_lbl = QLabel("IMPORTING TRACK…")
+        self._header_lbl.setStyleSheet(
+            f"font-size: 9px; font-weight: 700; letter-spacing: 0.1em; color: {t.ink3};"
+            f" background: transparent;"
+        )
+        header_row.addWidget(self._header_lbl, 1)
+
+        self._abort_btn = QPushButton("✕")
+        self._abort_btn.setFixedSize(18, 18)
+        self._abort_btn.setToolTip("Stop importing")
+        self._abort_btn.setStyleSheet(
+            f"QPushButton {{ border: none; background: transparent; font-size: 11px; "
+            f"color: {t.ink3}; padding: 0; border-radius: 4px; }}"
+            f"QPushButton:hover {{ background: #E53E3E22; color: #E53E3E; }}"
+        )
+        self._abort_btn.clicked.connect(self._on_abort_clicked)
+        header_row.addWidget(self._abort_btn)
+        lay.addLayout(header_row)
+
+        # Track name
+        self._track_lbl = QLabel("")
+        self._track_lbl.setStyleSheet(
+            f"font-size: 12px; font-weight: 600; color: {t.ink}; background: transparent;"
+        )
+        self._track_lbl.setWordWrap(False)
+        self._track_lbl.setMaximumWidth(210)
+        from PySide6.QtWidgets import QSizePolicy
+        self._track_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        lay.addWidget(self._track_lbl)
+
+        # Progress bar + percentage on the same row
+        prog_row = QHBoxLayout()
+        prog_row.setContentsMargins(0, 0, 0, 0)
+        prog_row.setSpacing(8)
+
+        self._bar = QProgressBar()
+        self._bar.setRange(0, 100)
+        self._bar.setValue(0)
+        self._bar.setTextVisible(False)
+        self._bar.setFixedHeight(5)
+        self._bar.setStyleSheet(
+            f"QProgressBar {{ background: {t.surface3}; border-radius: 3px; border: none; }}"
+            f"QProgressBar::chunk {{ background: {t.accent}; border-radius: 3px; }}"
+        )
+        prog_row.addWidget(self._bar, 1)
+
+        self._pct_lbl = QLabel("0%")
+        self._pct_lbl.setStyleSheet(
+            f"font-family: 'Consolas', monospace; font-size: 11px; "
+            f"color: {t.ink3}; background: transparent;"
+        )
+        self._pct_lbl.setFixedWidth(32)
+        self._pct_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        prog_row.addWidget(self._pct_lbl)
+        lay.addLayout(prog_row)
+
+        # Stage message
+        self._stage_lbl = QLabel("Initialising…")
+        self._stage_lbl.setStyleSheet(
+            f"font-size: 10px; color: {t.ink3}; background: transparent;"
+        )
+        self._stage_lbl.setWordWrap(False)
+        self._stage_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        lay.addWidget(self._stage_lbl)
+
+    # ------------------------------------------------------------------ API
+
+    def start(self, name: str):
+        """Show the widget and reset to 0% for a new import."""
+        display = os.path.splitext(os.path.basename(name))[0] if name else "New track"
+        self._track_lbl.setText(display)
+        self._bar.setValue(0)
+        self._pct_lbl.setText("0%")
+        self._stage_lbl.setText("Initialising…")
+        self._abort_btn.setEnabled(True)
+        self.show()
+
+    def update_progress(self, pct: int, message: str = ""):
+        self._bar.setValue(pct)
+        self._pct_lbl.setText(f"{pct}%")
+        if message:
+            self._stage_lbl.setText(message)
+
+    def finish(self):
+        """Mark as complete and hide after a brief moment."""
+        self._bar.setValue(100)
+        self._pct_lbl.setText("100%")
+        self._stage_lbl.setText("Done!")
+        self._abort_btn.setEnabled(False)
+        QTimer.singleShot(1200, self.hide)
+
+    def reset(self):
+        """Hide immediately without the done animation."""
+        self.hide()
+
+    # ------------------------------------------------------------------ abort
+
+    def _on_abort_clicked(self):
+        reply = QMessageBox.question(
+            self,
+            "Stop importing?",
+            "Are you sure you want to stop processing this track?\n\n"
+            "Any progress will be lost.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.reset()
+            self.abort_requested.emit()
 
 
 # ---------------------------------------------------------------------------

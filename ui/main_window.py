@@ -1,6 +1,6 @@
 """Main window — sidebar + stacked content area (library / player)."""
 
-from PySide6.QtCore import Qt, Signal, QObject, QEvent
+from PySide6.QtCore import Qt, Signal, QObject, QEvent, QTimer
 from PySide6.QtGui import QColor, QPalette, QFont, QAction
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from ui.theme import Theme, STEM_IDS
 from ui.library_panel import LibraryPanel
 from ui.player_panel import PlayerPanel
-from ui.import_dialog import ImportDialog, ProcessingDialog
+from ui.import_dialog import ImportDialog, ImportProgressWidget, ProcessingDialog
 from ui.settings_dialog import SettingsDialog
 from core.separator import SeparatorWorker
 from core.downloader import DownloaderWorker
@@ -303,8 +303,9 @@ class SidebarButton(QPushButton):
 
 
 class Sidebar(QFrame):
-    nav_changed = Signal(str)
+    nav_changed    = Signal(str)
     import_clicked = Signal()
+    abort_import   = Signal()        # forwarded from ImportProgressWidget
 
     def __init__(self, theme: Theme, song_count: int = 0, parent=None):
         super().__init__(parent)
@@ -367,6 +368,11 @@ class Sidebar(QFrame):
 
         lay.addStretch()
 
+        # import progress (hidden until an import is running)
+        self._import_progress = ImportProgressWidget(theme)
+        self._import_progress.abort_requested.connect(self.abort_import)
+        lay.addWidget(self._import_progress)
+
         # import CTA
         self._import_btn = QPushButton("+ Import track")
         self._import_btn.setFixedHeight(40)
@@ -404,6 +410,22 @@ class Sidebar(QFrame):
         stor_lay.addLayout(stor_header)
         stor_lay.addWidget(self._stor_lbl)
         lay.addWidget(storage)
+
+    # ── import progress helpers ───────────────────────────────────────────────
+
+    def show_import_progress(self, name: str):
+        self._import_progress.start(name)
+
+    def update_import_progress(self, pct: int, message: str = ""):
+        self._import_progress.update_progress(pct, message)
+
+    def finish_import_progress(self):
+        self._import_progress.finish()
+
+    def reset_import_progress(self):
+        self._import_progress.reset()
+
+    # ── nav ───────────────────────────────────────────────────────────────────
 
     def _on_nav(self, key: str):
         for k, btn in self._nav_buttons.items():
@@ -526,6 +548,7 @@ class MainWindow(QMainWindow):
         self._sidebar = Sidebar(self._theme, len(self._songs))
         self._sidebar.nav_changed.connect(self._on_nav)
         self._sidebar.import_clicked.connect(self._open_import)
+        self._sidebar.abort_import.connect(self._cancel_job)
         root.addWidget(self._sidebar)
 
         # main content
@@ -662,10 +685,11 @@ class MainWindow(QMainWindow):
 
     def _on_import_started(self, job: dict):
         self._pending_job = job
-        self._proc_dlg = ProcessingDialog(job, self._theme, self)
-        self._proc_dlg.completed.connect(self._on_processing_complete)
-        self._proc_dlg.cancelled.connect(self._cancel_job)
-        self._proc_dlg.show()
+        self._proc_dlg = None   # no longer using the modal dialog
+
+        # Show inline sidebar progress
+        name = job.get("name", "") or job.get("url", "New track")
+        self._sidebar.show_import_progress(name)
 
         if job["kind"] == "youtube":
             self._start_download(job)
@@ -675,7 +699,7 @@ class MainWindow(QMainWindow):
     def _start_download(self, job: dict):
         from core.downloader import DownloaderWorker
         self._dl_worker = DownloaderWorker(job["url"])
-        self._dl_worker.progress.connect(lambda pct, msg: self._proc_dlg and self._proc_dlg.update_progress(pct, msg))
+        self._dl_worker.progress.connect(lambda pct, msg: self._sidebar.update_import_progress(pct, msg))
         self._dl_worker.finished.connect(lambda path, info: self._start_separation(path, {**job, "yt_info": info}))
         self._dl_worker.error.connect(self._on_job_error)
         self._dl_worker.start()
@@ -684,14 +708,14 @@ class MainWindow(QMainWindow):
         self._pending_job = {**job, "audio_path": audio_path}
         out_dir = Path(tempfile.mkdtemp(prefix="rehearsalroom_sep_"))
         self._worker = SeparatorWorker(Path(audio_path), job.get("model", "htdemucs"), out_dir)
-        self._worker.progress.connect(lambda pct, msg: self._proc_dlg and self._proc_dlg.update_progress(pct, msg))
+        self._worker.progress.connect(lambda pct, msg: self._sidebar.update_import_progress(pct, msg))
         self._worker.finished.connect(self._on_separation_done)
         self._worker.error.connect(self._on_job_error)
         self._worker.start()
 
     def _on_separation_done(self, stem_paths: dict):
-        if not self._proc_dlg:
-            return
+        if not self._pending_job:
+            return   # job was cancelled
         job = self._pending_job or {}
 
         # --- Resolve metadata (strategies 1–3) ---
@@ -744,21 +768,24 @@ class MainWindow(QMainWindow):
         self._library.set_songs(self._songs)
         self._refresh_counts()
 
-        self._proc_dlg.on_finished()
-        self._proc_dlg.completed.connect(lambda: self._open_song(new_song))
+        self._pending_job = None
+        self._sidebar.finish_import_progress()
+        QTimer.singleShot(1200, lambda: self._open_song(new_song))
 
     def _on_processing_complete(self):
-        pass  # handled in _on_separation_done via completed signal chain
+        pass  # kept for compatibility; logic now in _on_separation_done
 
     def _cancel_job(self):
+        self._pending_job = None
         if self._worker and self._worker.isRunning():
             self._worker.terminate()
         if self._dl_worker and self._dl_worker.isRunning():
             self._dl_worker.terminate()
+        self._sidebar.reset_import_progress()
 
     def _on_job_error(self, msg: str):
-        if self._proc_dlg:
-            self._proc_dlg.reject()
+        self._pending_job = None
+        self._sidebar.reset_import_progress()
         _ErrorDialog(f"Processing failed:\n\n{msg}", self).exec()
 
     # ------------------------------------------------------------------
