@@ -2,18 +2,72 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QFrame, QSizePolicy, QMenu
 )
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QPixmap
 
 import time as _time
+from pathlib import Path
 
 from core.library_stats import fmt_size as _fmt_size
+from core.project import read_cover
+from core import artwork
 from ui.theme import Theme
-from ui.widgets import ArtThumbnail
+from ui.widgets import ArtThumbnail, Spinner
+
+
+# Cover-art pixmap cache, keyed by .stems path. Value None = "no art, resolved".
+_PIX_CACHE: dict[str, "QPixmap | None"] = {}
+# Tracks we've already queued for an online backfill this session.
+_ATTEMPTED: set[str] = set()
+
+
+def _load_cover_pixmap(song: dict) -> "QPixmap | None":
+    """Resolve a cover QPixmap for a song: embedded in .stems → disk cache.
+
+    Cached in-process so repeated row rebuilds don't re-read the zip.
+    """
+    sp = song.get("stems_path")
+    if not sp:
+        return None
+    if sp in _PIX_CACHE:
+        return _PIX_CACHE[sp]
+    data = None
+    try:
+        data = read_cover(Path(sp))
+    except Exception:
+        data = None
+    if not data:
+        data = artwork.cached_cover(song.get("artist", ""), song.get("title", ""))
+    pm = None
+    if data:
+        cand = QPixmap()
+        if cand.loadFromData(data) and not cand.isNull():
+            pm = cand
+    _PIX_CACHE[sp] = pm
+    return pm
+
+
+class _CoverBackfillWorker(QThread):
+    """Looks up missing covers online (iTunes) one at a time, politely."""
+    fetched = Signal(str, bytes)   # stems_path, image bytes
+
+    def __init__(self, jobs: list[tuple[str, str, str]], parent=None):
+        super().__init__(parent)
+        self._jobs = jobs          # (stems_path, artist, title)
+
+    def run(self):
+        for sp, artist, title in self._jobs:
+            if self.isInterruptionRequested():
+                return
+            data = artwork.itunes_cover(artist, title)
+            if data:
+                artwork.store_cached(artist, title, data)
+                self.fetched.emit(sp, data)
+            self.msleep(300)   # rate-limit the API
 
 
 def _fmt_viewed(ts: float | None) -> str:
@@ -168,7 +222,7 @@ class SongRow(QFrame):
         self._more_btn.clicked.connect(self._show_row_menu)
         self._more_btn.setStyleSheet(
             "QPushButton { border: none; background: transparent; "
-            "font-size: 18px; font-weight: 700; color: transparent; padding: 0; border-radius: 6px; }"
+            "font-size: 18px; font-weight: 700; color: transparent; padding: 0; border-radius: 4px; }"
             "QPushButton:hover { background: rgba(0,0,0,0.08); color: #666; }"
         )
         lay.addWidget(self._more_btn)
@@ -182,14 +236,14 @@ class SongRow(QFrame):
             QMenu {{
                 background: {t.surface};
                 border: 1px solid {t.border};
-                border-radius: 10px;
+                border-radius: 4px;
                 padding: 4px;
             }}
             QMenu::item {{
                 padding: 8px 18px 8px 12px;
                 font-size: 13px;
                 color: {t.ink};
-                border-radius: 6px;
+                border-radius: 4px;
             }}
             QMenu::item:selected {{ background: {t.surface2}; }}
         """)
@@ -230,27 +284,58 @@ class SongRow(QFrame):
         self._theme = theme
         self._artist_lbl.setStyleSheet(f"font-size: 13px; color: {theme.ink3};")
         self.setStyleSheet(
-            f"SongRow {{ background: transparent; border-radius: 10px; }}"
+            f"SongRow {{ background: transparent; border-radius: 4px; }}"
             f"SongRow:hover {{ background: {theme.surface2}; }}"
         )
+
+    # ── loading / dimmed feedback while a track opens ─────────────────────────
+
+    def song_id(self) -> str:
+        return self._song.get("id", "")
+
+    def set_loading(self, loading: bool):
+        """Swap the ⋮ button for a spinner while this track is opening."""
+        if loading:
+            if getattr(self, "_spinner", None) is None:
+                self._spinner = Spinner(self._theme.accent, 18)
+                self.layout().addWidget(self._spinner)
+            self._more_btn.hide()
+            self._spinner.show()
+            self._spinner.start()
+        else:
+            sp = getattr(self, "_spinner", None)
+            if sp is not None:
+                sp.stop()
+                sp.hide()
+            self._more_btn.show()
+
+    def set_dimmed(self, dimmed: bool):
+        """Fade this row while another track is loading."""
+        if dimmed:
+            from PySide6.QtWidgets import QGraphicsOpacityEffect
+            eff = QGraphicsOpacityEffect(self)
+            eff.setOpacity(0.4)
+            self.setGraphicsEffect(eff)
+        else:
+            self.setGraphicsEffect(None)
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit(self._song)
 
     def enterEvent(self, e):
-        self.setStyleSheet(f"background: {self._theme.surface2}; border-radius: 10px;")
+        self.setStyleSheet(f"background: {self._theme.surface2}; border-radius: 4px;")
         self._more_btn.setStyleSheet(
             "QPushButton { border: none; background: transparent; "
-            "font-size: 18px; font-weight: 700; color: #93939C; padding: 0; border-radius: 6px; }"
+            "font-size: 18px; font-weight: 700; color: #93939C; padding: 0; border-radius: 4px; }"
             f"QPushButton:hover {{ background: {self._theme.surface3}; color: {self._theme.ink}; }}"
         )
 
     def leaveEvent(self, e):
-        self.setStyleSheet("background: transparent; border-radius: 10px;")
+        self.setStyleSheet("background: transparent; border-radius: 4px;")
         self._more_btn.setStyleSheet(
             "QPushButton { border: none; background: transparent; "
-            "font-size: 18px; font-weight: 700; color: transparent; padding: 0; border-radius: 6px; }"
+            "font-size: 18px; font-weight: 700; color: transparent; padding: 0; border-radius: 4px; }"
             "QPushButton:hover { background: rgba(0,0,0,0.08); color: #666; }"
         )
 
@@ -351,7 +436,7 @@ class SongRowNoArtist(SongRow):
         self._more_btn.clicked.connect(self._show_row_menu)
         self._more_btn.setStyleSheet(
             "QPushButton { border: none; background: transparent; "
-            "font-size: 18px; font-weight: 700; color: transparent; padding: 0; border-radius: 6px; }"
+            "font-size: 18px; font-weight: 700; color: transparent; padding: 0; border-radius: 4px; }"
             "QPushButton:hover { background: rgba(0,0,0,0.08); color: #666; }"
         )
         lay.addWidget(self._more_btn)
@@ -375,6 +460,10 @@ class LibraryPanel(QWidget):
         self._sort_key: str = _DEFAULT_SORT
         self._sort_asc: bool = _DEFAULT_ASC
         self._header_labels: dict[str, _HeaderLabel] = {}
+        # Cover-art backfill: maps .stems path → its ArtThumbnail for the
+        # current rows, plus the running lookup worker.
+        self._art_by_path: dict[str, ArtThumbnail] = {}
+        self._art_loader: _CoverBackfillWorker | None = None
         self._setup_ui()
 
     # ── public API ────────────────────────────────────────────────────────────
@@ -634,8 +723,12 @@ class LibraryPanel(QWidget):
 
         self._sep.show()
 
+        # Reset the per-rebuild art registry; collect tracks needing a lookup.
+        self._art_by_path = {}
+        pending: list[tuple[str, str, str]] = []
+
         if self._nav_filter == "artist":
-            self._rebuild_rows_by_artist(songs)
+            self._rebuild_rows_by_artist(songs, pending)
         else:
             self._col_head_w.show()
             for song in songs:
@@ -646,8 +739,11 @@ class LibraryPanel(QWidget):
                 row.delete_requested.connect(self.delete_requested)
                 self._rows_lay.addWidget(row)
                 self._rows.append(row)
+                self._attach_cover(row._art, song, pending)
 
-    def _rebuild_rows_by_artist(self, songs: list[dict]):
+        self._start_backfill(pending)
+
+    def _rebuild_rows_by_artist(self, songs: list[dict], pending: list):
         """Build the artist-grouped layout: artist header then track rows (no artist column)."""
         # Group by artist, case-insensitively; first-seen capitalisation wins.
         groups: dict[str, tuple[str, list[dict]]] = {}   # lower -> (canonical, songs)
@@ -670,6 +766,66 @@ class LibraryPanel(QWidget):
                 row.delete_requested.connect(self.delete_requested)
                 self._rows_lay.addWidget(row)
                 self._rows.append(row)
+                self._attach_cover(row._art, song, pending)
+
+    # ── cover art ───────────────────────────────────────────────────────────
+
+    def _attach_cover(self, art: ArtThumbnail, song: dict, pending: list):
+        """Show a cached cover if available; otherwise queue an online lookup."""
+        sp = song.get("stems_path")
+        if not sp:
+            return
+        self._art_by_path[sp] = art
+        pm = _load_cover_pixmap(song)
+        if pm is not None:
+            art.set_cover(pm)
+            return
+        # No art yet — queue a one-time online lookup (needs at least a title).
+        title = song.get("title") or ""
+        if title and sp not in _ATTEMPTED:
+            _ATTEMPTED.add(sp)
+            pending.append((sp, song.get("artist", ""), title))
+
+    def _start_backfill(self, pending: list):
+        if not pending:
+            return
+        if self._art_loader and self._art_loader.isRunning():
+            # Let the in-flight loader finish; its items are already _ATTEMPTED.
+            return
+        self._art_loader = _CoverBackfillWorker(pending, self)
+        self._art_loader.fetched.connect(self._on_cover_fetched)
+        self._art_loader.start()
+
+    def _on_cover_fetched(self, stems_path: str, data: bytes):
+        pm = QPixmap()
+        if not (pm.loadFromData(data) and not pm.isNull()):
+            return
+        _PIX_CACHE[stems_path] = pm
+        art = self._art_by_path.get(stems_path)
+        if art is not None:
+            art.set_cover(pm)
+
+    def stop_background(self):
+        """Stop the cover-lookup worker (called on app close)."""
+        if self._art_loader and self._art_loader.isRunning():
+            self._art_loader.requestInterruption()
+            self._art_loader.wait(2000)
+
+    # ── track-open loading feedback ───────────────────────────────────────────
+
+    def show_loading(self, song_id: str):
+        """Dim every row except the one opening, which shows a spinner."""
+        for row in self._rows:
+            if row.song_id() == song_id:
+                row.set_loading(True)
+                row.set_dimmed(False)
+            else:
+                row.set_dimmed(True)
+
+    def clear_loading(self):
+        for row in self._rows:
+            row.set_loading(False)
+            row.set_dimmed(False)
 
     # ── theme ─────────────────────────────────────────────────────────────────
 

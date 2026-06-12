@@ -156,6 +156,19 @@ class MetadataWorker(QThread):
             meta = merge(acoustid_meta, yt, tags)
         except Exception:
             meta = {}
+
+        # Resolve cover art off the UI thread (embedded → iTunes → YouTube)
+        try:
+            from core.artwork import resolve_cover
+            cover = resolve_cover(
+                self._audio_path, meta.get("artist", ""), meta.get("title", ""),
+                self._yt_info,
+            )
+            if cover:
+                meta["_cover"] = cover
+        except Exception:
+            pass
+
         self.done.emit(meta)
 
 

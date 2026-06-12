@@ -80,7 +80,7 @@ QPushButton {{
     background: {self.surface2};
     color: {self.ink};
     border: none;
-    border-radius: 10px;
+    border-radius: 4px;
     padding: 9px 16px;
     font-size: 13px;
     font-weight: 600;
@@ -91,7 +91,7 @@ QPushButton:pressed {{ background: {self.border_strong}; }}
 QPushButton[role="primary"] {{
     background: {acc};
     color: #ffffff;
-    border-radius: 10px;
+    border-radius: 4px;
 }}
 QPushButton[role="primary"]:hover {{ background: {self._lighten(acc)}; }}
 
@@ -110,7 +110,7 @@ QPushButton[role="outline"]:hover {{ background: {self.surface2}; }}
 
 QPushButton[role="icon"] {{
     background: transparent;
-    border-radius: 8px;
+    border-radius: 4px;
     padding: 6px;
     color: {self.ink2};
 }}
@@ -121,7 +121,7 @@ QLineEdit {{
     background: {self.surface2};
     color: {self.ink};
     border: 1px solid {self.border_strong};
-    border-radius: 10px;
+    border-radius: 4px;
     padding: 10px 13px;
     font-size: 14px;
     selection-background-color: {acc_soft};
@@ -157,7 +157,7 @@ QToolTip {{
     background: {self.ink};
     color: {self.ink_inv};
     border: none;
-    border-radius: 8px;
+    border-radius: 4px;
     padding: 6px 10px;
     font-size: 12px;
 }}

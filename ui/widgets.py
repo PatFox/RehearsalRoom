@@ -5,7 +5,7 @@ import random
 import time
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, QRect, QPointF, QRectF, QEvent
+from PySide6.QtCore import Qt, Signal, QRect, QPointF, QRectF, QEvent, QTimer
 from PySide6.QtGui import QPainter, QColor, QPainterPath, QLinearGradient, QBrush, QPen, QFont
 from PySide6.QtWidgets import (
     QWidget, QSizePolicy, QLabel, QLineEdit, QStackedLayout, QApplication
@@ -130,6 +130,48 @@ class InlineEditLabel(QWidget):
                     self._cancel()
                     return True
         return super().eventFilter(obj, event)
+
+
+# ---------------------------------------------------------------------------
+# Spinner — small indeterminate loading indicator
+# ---------------------------------------------------------------------------
+
+class Spinner(QWidget):
+    """A small rotating arc used as a busy indicator."""
+
+    def __init__(self, color: str = "#2E6BFF", size: int = 18, parent=None):
+        super().__init__(parent)
+        self._color = color
+        self.setFixedSize(size, size)
+        self._angle = 0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._advance)
+
+    def start(self):
+        if not self._timer.isActive():
+            self._timer.start(70)
+
+    def stop(self):
+        self._timer.stop()
+
+    def _advance(self):
+        self._angle = (self._angle + 30) % 360
+        self.update()
+
+    def hideEvent(self, e):
+        self._timer.stop()
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        m = 3
+        rect = QRectF(m, m, self.width() - 2 * m, self.height() - 2 * m)
+        pen = QPen(QColor(self._color))
+        pen.setWidth(2)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.drawArc(rect, int(-self._angle * 16), int(280 * 16))
+        p.end()
 
 
 # ---------------------------------------------------------------------------
@@ -587,6 +629,7 @@ class ArtThumbnail(QWidget):
         self._gs = grad_start
         self._ge = grad_end
         self._seed = seed
+        self._pixmap = None   # real cover art, if available
         self.setFixedSize(size, size)
         rnd = random.Random(seed)
         self._bar_heights = [0.30 + rnd.random() * 0.70 for _ in range(7)]
@@ -595,21 +638,53 @@ class ArtThumbnail(QWidget):
         self._gs = grad_start
         self._ge = grad_end
         self._seed = seed
+        self._pixmap = None   # clear any previous cover; caller re-sets if available
         rnd = random.Random(seed)
         self._bar_heights = [0.30 + rnd.random() * 0.70 for _ in range(7)]
         self.update()
 
+    def set_cover(self, data) -> bool:
+        """Set real cover art from raw image bytes or a QPixmap. Returns True on success."""
+        from PySide6.QtGui import QPixmap
+        if isinstance(data, QPixmap):
+            pm = data
+        elif data:
+            pm = QPixmap()
+            if not pm.loadFromData(data):
+                return False
+        else:
+            return False
+        if pm.isNull():
+            return False
+        self._pixmap = pm
+        self.update()
+        return True
+
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         w, h = self.width(), self.height()
-        r = 9.0
+        r = 4.0
+
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, w, h), r, r)
+
+        # Real artwork: clip to rounded square and cover-fit the image.
+        if self._pixmap is not None:
+            p.setClipPath(path)
+            scaled = self._pixmap.scaled(
+                w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation)
+            x = (w - scaled.width()) / 2
+            y = (h - scaled.height()) / 2
+            p.drawPixmap(int(x), int(y), scaled)
+            p.end()
+            return
 
         grad = QLinearGradient(0, 0, w, h)
         grad.setColorAt(0, QColor(self._gs))
         grad.setColorAt(1, QColor(self._ge))
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(0, 0, w, h), r, r)
         p.fillPath(path, grad)
 
         # bars

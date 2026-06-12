@@ -35,6 +35,23 @@ def _fmt_clock(ms: int) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
+def _cover_bytes(song: dict):
+    """Resolve cover-art bytes for a song: embedded in .stems → disk cache."""
+    from pathlib import Path
+    from core.project import read_cover
+    from core import artwork
+    sp = song.get("stems_path")
+    data = None
+    if sp:
+        try:
+            data = read_cover(Path(sp))
+        except Exception:
+            data = None
+    if not data:
+        data = artwork.cached_cover(song.get("artist", ""), song.get("title", ""))
+    return data
+
+
 # ---------------------------------------------------------------------------
 # Ruler (time markers above the lanes)
 # ---------------------------------------------------------------------------
@@ -220,18 +237,18 @@ class MSSButton(QPushButton):
             if self._letter == "M":
                 self.setStyleSheet(
                     "background: #FFE9C7; color: #B26B00; border: 1px solid #F2C887; "
-                    "border-radius: 7px; font-size: 11px; font-weight: 700;"
+                    "border-radius: 4px; font-size: 11px; font-weight: 700;"
                 )
             else:
                 self.setStyleSheet(
                     "background: rgba(46,107,255,0.12); color: #2E6BFF; "
-                    "border: 1px solid rgba(46,107,255,0.4); border-radius: 7px; "
+                    "border: 1px solid rgba(46,107,255,0.4); border-radius: 4px; "
                     "font-size: 11px; font-weight: 700;"
                 )
         else:
             self.setStyleSheet(
                 "background: #F4F4F0; color: #93939C; border: 1px solid transparent; "
-                "border-radius: 7px; font-size: 11px; font-weight: 700;"
+                "border-radius: 4px; font-size: 11px; font-weight: 700;"
             )
 
 
@@ -832,7 +849,7 @@ class MetaDialog(QDialog):
         self.setFixedWidth(460)
         self.setModal(True)
         self._setup_ui(meta, stem_labels, stem_colors)
-        self.setStyleSheet(f"QDialog {{ background: {theme.surface}; border-radius: 22px; }}")
+        self.setStyleSheet(f"QDialog {{ background: {theme.surface}; border-radius: 4px; }}")
 
     def _setup_ui(self, meta: dict, stem_labels: dict, stem_colors: dict):
         lay = QVBoxLayout(self)
@@ -1178,6 +1195,8 @@ class PlayerPanel(QWidget):
         self._title_lbl.setText(song.get("title", ""))
         self._artist_lbl.setText(song.get("artist", ""))
         self._art.update_song(song["grad"][0], song["grad"][1], song.get("seed", 1))
+        # Real cover art (embedded in .stems → disk cache), same source as the library
+        self._art.set_cover(_cover_bytes(song))
 
         source_url = song.get("source_url", "")
         if source_url:

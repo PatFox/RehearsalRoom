@@ -22,7 +22,7 @@ class SettingsDialog(QDialog):
         self.setFixedWidth(500)
         self.setModal(True)
         self._setup_ui()
-        self.setStyleSheet(f"QDialog {{ background: {theme.surface}; border-radius: 22px; }}")
+        self.setStyleSheet(f"QDialog {{ background: {theme.surface}; border-radius: 4px; }}")
 
     def _setup_ui(self):
         lay = QVBoxLayout(self)

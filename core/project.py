@@ -140,6 +140,7 @@ def save_stems(
     artist: str = "",
     source_url: str = "",
     stem_labels: Optional[dict[str, str]] = None,
+    cover: Optional[bytes] = None,
 ) -> StemsProject:
     """Encode WAV stem files to Opus and pack into a .stems ZIP archive."""
     output_path = Path(output_path)
@@ -178,6 +179,8 @@ def save_stems(
             zf.writestr("manifest.json", json.dumps(manifest.to_dict(), indent=2))
             for stem_id, opus_path in opus_paths.items():
                 zf.write(opus_path, f"{stem_id}.opus")
+            if cover:
+                zf.writestr("cover.jpg", cover)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -225,6 +228,17 @@ def read_manifest(stems_path: Path) -> StemsManifest:
     with zipfile.ZipFile(stems_path, "r") as zf:
         with zf.open("manifest.json") as f:
             return StemsManifest.from_dict(json.load(f))
+
+
+def read_cover(stems_path: Path) -> Optional[bytes]:
+    """Return embedded cover.jpg bytes from a .stems file, or None if absent."""
+    try:
+        with zipfile.ZipFile(stems_path, "r") as zf:
+            if "cover.jpg" in zf.namelist():
+                return zf.read("cover.jpg")
+    except Exception:
+        pass
+    return None
 
 
 def update_manifest(stems_path: Path, manifest: StemsManifest) -> None:

@@ -352,13 +352,18 @@ class ImportDialog(QDialog):
         foot.setSpacing(10)
         foot.addStretch()
         cancel_btn = QPushButton("Cancel")
-        cancel_btn.setProperty("role", "ghost")
+        cancel_btn.setStyleSheet(
+            f"QPushButton {{ background: {self._theme.surface2}; color: {self._theme.ink}; "
+            f"border: none; border-radius: 4px; padding: 9px 16px; "
+            f"font-size: 13px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background: {self._theme.surface3}; }}"
+        )
         cancel_btn.clicked.connect(self.reject)
         self._start_btn = QPushButton("Separate")
         acc = self._theme.accent
         self._start_btn.setStyleSheet(
             f"QPushButton {{ background: {acc}; color: white; border: none; "
-            f"border-radius: 5px; padding: 9px 16px; font-size: 13px; font-weight: 600; }}"
+            f"border-radius: 4px; padding: 9px 16px; font-size: 13px; font-weight: 600; }}"
             f"QPushButton:hover {{ background: {Theme._lighten(acc)}; }}"
             f"QPushButton:disabled {{ background: {self._theme.surface3}; "
             f"color: {self._theme.ink3}; }}"
@@ -371,7 +376,7 @@ class ImportDialog(QDialog):
 
     def _apply_theme(self):
         self.setStyleSheet(
-            f"QDialog {{ background: {self._theme.surface}; border-radius: 11px; }}"
+            f"QDialog {{ background: {self._theme.surface}; border-radius: 4px; }}"
         )
 
     # ------------------------------------------------------------------ helpers
@@ -492,7 +497,7 @@ class ImportProgressWidget(QFrame):
         from ui.theme import Theme
         t = self._theme
         self.setStyleSheet(
-            f"QFrame {{ background: {t.surface2}; border-radius: 12px; border: none; }}"
+            f"QFrame {{ background: {t.surface2}; border-radius: 4px; border: none; }}"
         )
 
         lay = QVBoxLayout(self)

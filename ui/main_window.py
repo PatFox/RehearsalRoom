@@ -1,6 +1,6 @@
 """Main window — sidebar + stacked content area (library / player)."""
 
-from PySide6.QtCore import Qt, Signal, QObject, QEvent, QTimer
+from PySide6.QtCore import Qt, Signal, QObject, QEvent, QTimer, QThread
 from PySide6.QtGui import QColor, QPalette, QFont, QAction
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
@@ -67,7 +67,7 @@ class _ErrorDialog(QDialog):
                 font-size: 11.5px;
                 background: #F4F4F0;
                 border: 1px solid #E2E2DC;
-                border-radius: 8px;
+                border-radius: 4px;
                 padding: 12px;
             }
             QLabel:hover { background: #ECECE6; border-color: #2E6BFF; cursor: pointer; }
@@ -97,7 +97,7 @@ class _ErrorDialog(QDialog):
                 font-size: 11.5px;
                 background: #F0FDF4;
                 border: 1px solid #86EFAC;
-                border-radius: 8px;
+                border-radius: 4px;
                 padding: 12px;
             }
         """)
@@ -140,7 +140,7 @@ class _DeleteConfirmDialog(QDialog):
         delete_btn = QPushButton("Delete")
         delete_btn.setFixedHeight(36)
         delete_btn.setStyleSheet(
-            "QPushButton { background: #E53E3E; color: white; border-radius: 8px; "
+            "QPushButton { background: #E53E3E; color: white; border-radius: 4px; "
             "font-weight: 600; padding: 0 18px; }"
             "QPushButton:hover { background: #C53030; }"
         )
@@ -230,7 +230,7 @@ class AboutDialog(QDialog):
         header.setSpacing(14)
         mark = QFrame()
         mark.setFixedSize(44, 44)
-        mark.setStyleSheet("background: #17171B; border-radius: 12px;")
+        mark.setStyleSheet("background: #17171B; border-radius: 4px;")
         mark_lbl = QLabel("〜")
         mark_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         mark_lbl.setStyleSheet("color: white; font-size: 16px; background: transparent;")
@@ -326,7 +326,7 @@ class Sidebar(QFrame):
         brand_mark = QFrame()
         brand_mark.setFixedSize(34, 34)
         brand_mark.setStyleSheet(
-            "background: #17171B; border-radius: 10px;"
+            "background: #17171B; border-radius: 4px;"
         )
         # wave icon (text fallback)
         mark_lbl = QLabel("〜")
@@ -473,7 +473,7 @@ class Sidebar(QFrame):
             QPushButton {{
                 background: transparent;
                 color: {t.ink2};
-                border-radius: 8px;
+                border-radius: 4px;
                 text-align: left;
                 padding: 8px 10px;
                 font-size: 14px;
@@ -486,7 +486,7 @@ class Sidebar(QFrame):
             QPushButton {{
                 background: {t.accent};
                 color: white;
-                border-radius: 10px;
+                border-radius: 4px;
                 font-weight: 600;
                 font-size: 14px;
                 text-align: center;
@@ -520,6 +520,33 @@ class _FootswitchFilter(QObject):
         return False
 
 
+class _TrackLoadWorker(QThread):
+    """Loads a .stems file and builds its StemPlayer off the UI thread."""
+    loaded = Signal(object, object)   # StemPlayer, loops(list)
+    error  = Signal(str)
+
+    def __init__(self, stems_path: str, parent=None):
+        super().__init__(parent)
+        self._stems_path = stems_path
+
+    def run(self):
+        try:
+            from core.project import load_stems, read_manifest
+            from core.player import StemPlayer
+            loops = []
+            try:
+                loops = read_manifest(Path(self._stems_path)).loops
+            except Exception:
+                loops = []
+            project = load_stems(Path(self._stems_path))
+            player = StemPlayer()
+            player.load(project.stem_paths)
+            self.loaded.emit(player, loops)
+        except Exception as exc:
+            import traceback
+            self.error.emit(f"{exc}\n\n{traceback.format_exc()}")
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -535,6 +562,7 @@ class MainWindow(QMainWindow):
         self._worker: SeparatorWorker | None = None
         self._dl_worker: DownloaderWorker | None = None
         self._meta_worker = None
+        self._load_worker: _TrackLoadWorker | None = None
         self._pending_job: dict | None = None
         # Multi-track import queue
         self._job_queue:  list[dict] = []
@@ -648,31 +676,44 @@ class MainWindow(QMainWindow):
         self._library.set_last_viewed(self._last_viewed)
 
     def _open_song(self, song: dict):
+        # Ignore clicks while a track is already loading.
+        if self._load_worker is not None and self._load_worker.isRunning():
+            return
+
         self._current_song = song
         S.record_viewed(song["id"])
         self._last_viewed = S.get_last_viewed()
         self._library.set_last_viewed(self._last_viewed)
-        # Attach loops from manifest if not already present
-        if song.get("stems_path") and "loops" not in song:
-            try:
-                from core.project import read_manifest
-                manifest = read_manifest(Path(song["stems_path"]))
-                song["loops"] = manifest.loops
-            except Exception:
-                song["loops"] = []
-        audio_player = None
-        stems_path = song.get("stems_path")
-        if stems_path:
-            try:
-                from core.project import load_stems
-                from core.player import StemPlayer
-                project = load_stems(Path(stems_path))
-                audio_player = StemPlayer()
-                audio_player.load(project.stem_paths)
-            except Exception as exc:
-                import traceback
-                _ErrorDialog(f"Could not load audio:\n\n{exc}\n\n{traceback.format_exc()}", self).exec()
 
+        stems_path = song.get("stems_path")
+        if not stems_path:
+            # No audio to load — open immediately.
+            song.setdefault("loops", [])
+            self._enter_player(song, None)
+            return
+
+        # Show loading feedback, then load off the UI thread so the spinner
+        # animates and the rest of the list stays responsive.
+        self._library.show_loading(song["id"])
+        self._load_worker = _TrackLoadWorker(stems_path, self)
+        self._load_worker.loaded.connect(
+            lambda player, loops, s=song: self._on_track_loaded(s, player, loops))
+        self._load_worker.error.connect(
+            lambda msg, s=song: self._on_track_load_error(s, msg))
+        self._load_worker.start()
+
+    def _on_track_loaded(self, song: dict, audio_player, loops: list):
+        self._library.clear_loading()
+        self._load_worker = None
+        song["loops"] = loops
+        self._enter_player(song, audio_player)
+
+    def _on_track_load_error(self, song: dict, msg: str):
+        self._library.clear_loading()
+        self._load_worker = None
+        _ErrorDialog(f"Could not load audio:\n\n{msg}", self).exec()
+
+    def _enter_player(self, song: dict, audio_player):
         self._player.load_song(song, audio_player)
         self._stack.setCurrentIndex(1)
         self._topbar.hide()
@@ -844,6 +885,7 @@ class MainWindow(QMainWindow):
         job = self._pending_job
 
         try:
+            cover = meta.pop("_cover", None)
             name = job.get("name", "")
             fallback_title = os.path.splitext(name)[0] if name else "New Track"
             title  = meta.get("title")  or fallback_title
@@ -858,7 +900,7 @@ class MainWindow(QMainWindow):
             project = save_stems(
                 {k: Path(v) for k, v in stem_paths.items()},
                 out_path, title=title, artist=artist,
-                source_url=job.get("url", ""),
+                source_url=job.get("url", ""), cover=cover,
             )
 
             new_song = song_from_stems_file(out_path) or {
@@ -966,6 +1008,9 @@ class MainWindow(QMainWindow):
         """Stop any running import workers before the window is destroyed."""
         self._job_queue = []
         self._stop_workers()
+        self._library.stop_background()
+        if self._load_worker is not None and self._load_worker.isRunning():
+            self._load_worker.wait(3000)
         # Give cooperative workers a moment to unwind so Qt doesn't report a
         # thread being destroyed while still running.
         for w in list(self._retired_workers):
@@ -998,14 +1043,14 @@ class MainWindow(QMainWindow):
             QMenu {{
                 background: {t.surface};
                 border: 1px solid {t.border};
-                border-radius: 10px;
+                border-radius: 4px;
                 padding: 4px;
             }}
             QMenu::item {{
                 padding: 8px 18px 8px 12px;
                 font-size: 13px;
                 color: {t.ink};
-                border-radius: 6px;
+                border-radius: 4px;
             }}
             QMenu::item:selected {{
                 background: {t.surface2};
