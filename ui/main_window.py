@@ -427,6 +427,12 @@ class Sidebar(QFrame):
     def reset_import_progress(self):
         self._import_progress.reset()
 
+    def update_import_total(self, current: int, total: int):
+        self._import_progress.set_count(current, total)
+
+    def set_import_name(self, title: str, artist: str = ""):
+        self._import_progress.set_name(title, artist)
+
     # ── nav ───────────────────────────────────────────────────────────────────
 
     def _on_nav(self, key: str):
@@ -532,7 +538,14 @@ class MainWindow(QMainWindow):
         # Multi-track import queue
         self._job_queue:  list[dict] = []
         self._job_total:  int        = 0
+        self._auto_open_single: bool = False
         self._last_imported_song: dict | None = None
+        # Generation token: bumped whenever workers are cancelled so any
+        # in-flight (already-queued) signals from retired workers are ignored.
+        self._gen: int = 0
+        # Keep references to retired-but-not-yet-finished threads so Python
+        # never garbage-collects a QThread whose C++ thread is still alive.
+        self._retired_workers: list = []
 
         self._setup_ui()
         self._apply_theme()
@@ -691,8 +704,23 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _on_import_started(self, jobs: list):
+        if not jobs:
+            return
+        # If a batch is already running, append to it instead of overwriting.
+        in_progress = bool(self._pending_job) or bool(self._job_queue)
+        if in_progress:
+            self._job_queue.extend(jobs)
+            self._job_total += len(jobs)
+            # Adding more tracks makes this a multi-track batch — don't auto-open.
+            self._auto_open_single = False
+            # Refresh the N/M counter on the live progress widget.
+            current = self._job_total - len(self._job_queue)
+            self._sidebar.update_import_total(current, self._job_total)
+            return
+
         self._job_queue = list(jobs)
         self._job_total = len(jobs)
+        self._auto_open_single = len(jobs) == 1
         self._last_imported_song = None
         self._proc_dlg = None
         self._process_next_job()
@@ -701,7 +729,7 @@ class MainWindow(QMainWindow):
         if not self._job_queue:
             # All done — finish the progress widget then optionally open last track
             self._sidebar.finish_import_progress()
-            if self._job_total == 1 and self._last_imported_song:
+            if self._auto_open_single and self._last_imported_song:
                 if self._stack.currentIndex() == 0:
                     song = self._last_imported_song
                     QTimer.singleShot(1200, lambda: self._open_song(song))
@@ -721,22 +749,59 @@ class MainWindow(QMainWindow):
 
     def _start_download(self, job: dict):
         from core.downloader import DownloaderWorker
+        # Retire any previous download worker before replacing the reference.
+        self._retire_worker(self._dl_worker)
+        self._dl_worker = None
+        token = self._gen
         self._dl_worker = DownloaderWorker(job["url"])
-        self._dl_worker.progress.connect(lambda pct, msg: self._sidebar.update_import_progress(pct, msg))
-        self._dl_worker.finished.connect(lambda path, info: self._start_separation(path, {**job, "yt_info": info}))
-        self._dl_worker.error.connect(self._on_job_error)
+        self._dl_worker.progress.connect(
+            lambda pct, msg, t=token: self._on_worker_progress(pct, msg, t))
+        self._dl_worker.info_ready.connect(
+            lambda title, artist, t=token: self._on_worker_info(title, artist, t))
+        self._dl_worker.finished.connect(
+            lambda path, info, t=token: self._on_download_done(path, info, job, t))
+        self._dl_worker.error.connect(
+            lambda m, t=token: self._on_job_error(m, t))
         self._dl_worker.start()
 
+    def _on_download_done(self, path: str, info: dict, job: dict, token: int):
+        if token != self._gen:
+            return   # stale signal from a cancelled/retired download
+        # The download thread has finished; retire it cleanly before separation.
+        dl = self._dl_worker
+        self._dl_worker = None
+        self._start_separation(path, {**job, "yt_info": info})
+        self._retire_worker(dl)
+
     def _start_separation(self, audio_path: str, job: dict):
+        # Retire any previous separation worker before replacing the reference.
+        self._retire_worker(self._worker)
+        self._worker = None
         self._pending_job = {**job, "audio_path": audio_path}
+        token = self._gen
         out_dir = Path(tempfile.mkdtemp(prefix="rehearsalroom_sep_"))
         self._worker = SeparatorWorker(Path(audio_path), job.get("model", "htdemucs"), out_dir)
-        self._worker.progress.connect(lambda pct, msg: self._sidebar.update_import_progress(pct, msg))
-        self._worker.finished.connect(self._on_separation_done)
-        self._worker.error.connect(self._on_job_error)
+        self._worker.progress.connect(
+            lambda pct, msg, t=token: self._on_worker_progress(pct, msg, t))
+        self._worker.finished.connect(
+            lambda paths, t=token: self._on_separation_done(paths, t))
+        self._worker.error.connect(
+            lambda m, t=token: self._on_job_error(m, t))
         self._worker.start()
 
-    def _on_separation_done(self, stem_paths: dict):
+    def _on_worker_progress(self, pct: int, msg: str, token: int):
+        if token != self._gen:
+            return   # stale progress from a retired worker
+        self._sidebar.update_import_progress(pct, msg)
+
+    def _on_worker_info(self, title: str, artist: str, token: int):
+        if token != self._gen:
+            return   # stale info from a retired worker
+        self._sidebar.set_import_name(title, artist)
+
+    def _on_separation_done(self, stem_paths: dict, token: int | None = None):
+        if token is not None and token != self._gen:
+            return   # stale signal from a cancelled/retired worker
         if not self._pending_job:
             return   # job was cancelled
         job = self._pending_job or {}
@@ -798,16 +863,53 @@ class MainWindow(QMainWindow):
     def _on_processing_complete(self):
         pass  # kept for compatibility
 
+    def _retire_worker(self, worker):
+        """Safely tear down a QThread worker without crashing.
+
+        Disconnects its signals (so no late callbacks fire), stops it, and
+        keeps a reference until the underlying thread has truly finished so
+        Python can't garbage-collect a live QThread.
+        """
+        if worker is None:
+            return
+        sigs = [worker.progress, worker.finished, worker.error]
+        if hasattr(worker, "info_ready"):
+            sigs.append(worker.info_ready)
+        for sig in sigs:
+            try:
+                sig.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+        # Cooperative cancel only. NEVER call terminate(): force-killing a
+        # Python QThread mid-execution can leave the GIL locked and deadlock
+        # the whole process. The worker checks isInterruptionRequested() at
+        # safe points and exits on its own; its signals are already
+        # disconnected, so its result (if any) is ignored.
+        worker.requestInterruption()
+        # Drop refs to threads that have fully finished, keep live ones around
+        # so Python never GCs a running QThread.
+        self._retired_workers = [w for w in self._retired_workers if w.isRunning()]
+        self._retired_workers.append(worker)
+
     def _stop_workers(self):
-        if self._worker and self._worker.isRunning():
-            self._worker.terminate()
-        if self._dl_worker and self._dl_worker.isRunning():
-            self._dl_worker.terminate()
+        # Invalidate any in-flight signals from the current workers first.
+        self._gen += 1
+        self._retire_worker(self._worker)
+        self._retire_worker(self._dl_worker)
+        self._worker = None
+        self._dl_worker = None
         self._pending_job = None
 
     def _cancel_current_job(self):
-        """Skip the current track and continue with the rest of the queue."""
+        """Skip the current track and shrink the batch accordingly.
+
+        The skipped track is dropped from the count, so the displayed N/M
+        reflects only the tracks that will actually be imported (e.g. 1/3
+        becomes 1/2 after one skip).
+        """
         self._stop_workers()
+        if self._job_total > 0:
+            self._job_total -= 1
         self._process_next_job()
 
     def _cancel_all_jobs(self):
@@ -817,11 +919,25 @@ class MainWindow(QMainWindow):
         self._job_total = 0
         self._sidebar.reset_import_progress()
 
-    def _on_job_error(self, msg: str):
+    def _on_job_error(self, msg: str, token: int | None = None):
+        if token is not None and token != self._gen:
+            return   # stale error from a cancelled/retired worker
         self._pending_job = None
         # Skip the failed track and continue with the rest
         _ErrorDialog(f"Processing failed:\n\n{msg}", self).exec()
         self._process_next_job()
+
+    def closeEvent(self, event):
+        """Stop any running import workers before the window is destroyed."""
+        self._job_queue = []
+        self._stop_workers()
+        # Give cooperative workers a moment to unwind so Qt doesn't report a
+        # thread being destroyed while still running.
+        for w in list(self._retired_workers):
+            if w and w.isRunning():
+                w.requestInterruption()
+                w.wait(3000)
+        super().closeEvent(event)
 
     # ------------------------------------------------------------------
     # Library scanning

@@ -24,8 +24,13 @@ def _get_ffmpeg() -> tuple[str, str]:
     raise FileNotFoundError("ffmpeg not found. Run: pip install imageio-ffmpeg")
 
 
+class _Cancelled(Exception):
+    """Raised internally to unwind run() cleanly when the worker is cancelled."""
+
+
 class DownloaderWorker(QThread):
     progress = Signal(int, str)
+    info_ready = Signal(str, str)  # title, artist — emitted once metadata is known
     finished = Signal(str, dict)   # path to WAV file, yt-dlp info dict
     error = Signal(str)
 
@@ -75,6 +80,13 @@ class DownloaderWorker(QThread):
                 self.error.emit(f"yt-dlp could not fetch the video.\n\n{detail}")
                 return
 
+            # Surface the song name / artist so the UI can stop showing the raw URL.
+            from core.metadata import from_yt_info
+            meta = from_yt_info(yt_info)
+            title = meta.get("title", "")
+            if title:
+                self.info_ready.emit(title, meta.get("artist", ""))
+
             # Find the downloaded file
             raw_path = None
             for f in sorted(os.listdir(self.output_dir)):
@@ -106,14 +118,24 @@ class DownloaderWorker(QThread):
                 self.error.emit(f"ffmpeg conversion failed:\n{result.stderr[-800:]}")
                 return
 
+            if self.isInterruptionRequested():
+                raise _Cancelled
+
             self.progress.emit(18, "Download complete. Starting separation…")
             self.finished.emit(wav_path, yt_info)
 
+        except _Cancelled:
+            return   # cancelled — exit quietly, emit nothing
         except Exception as exc:
+            if self.isInterruptionRequested():
+                return   # error caused by teardown during cancel — ignore
             import traceback
             self.error.emit(f"{exc}\n\n{traceback.format_exc()}")
 
     def _hook(self, d: dict):
+        # Cooperative cancel point — raises out of yt-dlp's download loop.
+        if self.isInterruptionRequested():
+            raise _Cancelled
         if d["status"] == "downloading":
             try:
                 total = d.get("total_bytes") or d.get("total_bytes_estimate") or 1

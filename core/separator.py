@@ -46,6 +46,10 @@ def _resample(wav: torch.Tensor, orig_sr: int, target_sr: int) -> torch.Tensor:
     return F.resample(wav, orig_sr, target_sr)
 
 
+class _Cancelled(Exception):
+    """Raised internally to unwind run() cleanly when the worker is cancelled."""
+
+
 class SeparatorWorker(QThread):
     progress = Signal(int, str)   # percent, status message
     finished = Signal(dict)       # stem_id -> Path (WAV)
@@ -65,10 +69,14 @@ class SeparatorWorker(QThread):
 
             # Convert to WAV if needed (handles mp3, m4a, ogg, etc.)
             audio_path = _ensure_wav(self.audio_path)
+            if self.isInterruptionRequested():
+                raise _Cancelled
 
             self.progress.emit(5, "Loading model…")
             model = get_model(self.model_name)
             model.eval()
+            if self.isInterruptionRequested():
+                raise _Cancelled
 
             self.progress.emit(15, "Loading audio…")
             data, sr = sf.read(str(audio_path), dtype="float32", always_2d=True)
@@ -97,9 +105,15 @@ class SeparatorWorker(QThread):
             import tqdm as _tqdm_mod
             _orig_tqdm = _tqdm_mod.tqdm
             _emit = lambda pct, msg: self.progress.emit(pct, msg)
+            worker = self
 
             class _SignalTqdm(_orig_tqdm):
                 def update(self, n=1):
+                    # Cooperative cancel point — fires frequently during the
+                    # (slow) separation loop, so a skip/abort takes effect within
+                    # a chunk instead of after the whole track.
+                    if worker.isInterruptionRequested():
+                        raise _Cancelled
                     result = super().update(n)
                     if self.total:
                         frac = min(1.0, self.n / self.total)
@@ -131,9 +145,16 @@ class SeparatorWorker(QThread):
                 sf.write(str(out_path), audio_np, model.samplerate)
                 stem_paths[name] = out_path
 
+            if self.isInterruptionRequested():
+                raise _Cancelled
+
             self.progress.emit(100, "Done.")
             self.finished.emit({k: str(v) for k, v in stem_paths.items()})
 
+        except _Cancelled:
+            return   # cancelled — exit quietly, emit nothing
         except Exception as exc:
+            if self.isInterruptionRequested():
+                return   # error caused by teardown during cancel — ignore
             import traceback
             self.error.emit(f"{exc}\n\n{traceback.format_exc()}")

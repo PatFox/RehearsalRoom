@@ -371,6 +371,7 @@ class ImportDialog(QDialog):
         self._url_input = QLineEdit()
         self._url_input.setPlaceholderText("https://youtube.com/watch?v=…")
         self._url_input.returnPressed.connect(self._add_url)
+        self._url_input.textChanged.connect(self._update_start_btn)
         url_row.addWidget(self._url_input, 1)
         add_btn = QPushButton("Add")
         add_btn.setProperty("role", "outline")
@@ -448,9 +449,11 @@ class ImportDialog(QDialog):
             tab = self._tabs.active()
             if tab == "file":
                 self._start_btn.setText("✦  Choose files & separate")
+                self._start_btn.setEnabled(False)
             else:
                 self._start_btn.setText("✦  Fetch & separate")
-            self._start_btn.setEnabled(False)
+                # Enable as soon as there's something typed, even before Add is clicked
+                self._start_btn.setEnabled(bool(self._url_input.text().strip()))
         else:
             label = f"Separate {n} track{'s' if n != 1 else ''}"
             self._start_btn.setText(f"✦  {label}")
@@ -637,6 +640,18 @@ class ImportProgressWidget(QFrame):
         self._abort_btn.setEnabled(True)
         self._update_header()
         self.show()
+
+    def set_count(self, current: int, total: int):
+        """Update the N/M counter in place without resetting progress."""
+        self._current = current
+        self._total   = total
+        self._update_header()
+
+    def set_name(self, title: str, artist: str = ""):
+        """Replace the displayed track label once the real name is known."""
+        if not title:
+            return
+        self._track_lbl.setText(f"{title} — {artist}" if artist else title)
 
     def _update_header(self):
         if self._total > 1:
