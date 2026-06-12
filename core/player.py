@@ -131,7 +131,7 @@ class StemPlayer:
 
         # Fill thread
         self._fill_event: threading.Event = threading.Event()
-        self._fill_stop:  bool  = False
+        self._stop_fill:  bool  = False
         self._fill_thread: Optional[threading.Thread] = None
 
         self._stream = None

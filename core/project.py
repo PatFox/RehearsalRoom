@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Optional
 
 import soundfile as sf
-import numpy as np
 
 
 def _ffmpeg() -> str:
@@ -155,10 +154,9 @@ def save_stems(
 
     try:
         for stem_id, wav_path in wav_paths.items():
-            # Read WAV to get duration
-            data, samplerate = sf.read(str(wav_path))
             if duration_ms == 0:
-                duration_ms = int(len(data) / samplerate * 1000)
+                info = sf.info(str(wav_path))
+                duration_ms = int(info.frames / info.samplerate * 1000)
 
             # Encode to Opus via ffmpeg
             opus_path = tmp_dir / f"{stem_id}.opus"
@@ -194,8 +192,8 @@ def load_stems(stems_path: Path, extract_dir: Optional[Path] = None) -> StemsPro
     """
     stems_path = Path(stems_path)
     if extract_dir is None:
-        import tempfile
-        extract_dir = Path(tempfile.mkdtemp(prefix="rehearsalroom_"))
+        from core.tempdirs import make_temp_dir
+        extract_dir = make_temp_dir("stems_")
     else:
         extract_dir = Path(extract_dir)
         extract_dir.mkdir(parents=True, exist_ok=True)
@@ -231,12 +229,20 @@ def read_manifest(stems_path: Path) -> StemsManifest:
 
 def update_manifest(stems_path: Path, manifest: StemsManifest) -> None:
     """Rewrite the manifest.json inside an existing .stems file."""
-    import tempfile, os
-    tmp = Path(tempfile.mktemp(suffix=".stems"))
-    with zipfile.ZipFile(stems_path, "r") as zin, zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_STORED) as zout:
-        for item in zin.infolist():
-            if item.filename == "manifest.json":
-                zout.writestr("manifest.json", json.dumps(manifest.to_dict(), indent=2))
-            else:
-                zout.writestr(item, zin.read(item.filename))
-    os.replace(tmp, stems_path)
+    import os
+    stems_path = Path(stems_path)
+    # Build the replacement next to the target: os.replace() is only atomic —
+    # and on Windows only *possible* — within a single volume, so a temp file
+    # in %TEMP% would fail for libraries on another drive.
+    tmp = stems_path.with_suffix(".stems.tmp")
+    try:
+        with zipfile.ZipFile(stems_path, "r") as zin, zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_STORED) as zout:
+            for item in zin.infolist():
+                if item.filename == "manifest.json":
+                    zout.writestr("manifest.json", json.dumps(manifest.to_dict(), indent=2))
+                else:
+                    zout.writestr(item, zin.read(item.filename))
+        os.replace(tmp, stems_path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)

@@ -1,15 +1,15 @@
-"""ImportDialog, ImportProgressWidget, and ProcessingDialog."""
+"""ImportDialog and ImportProgressWidget."""
 
 import os
-from PySide6.QtCore import Qt, Signal, QTimer, QUrl, QMimeData
-from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent
+from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QFrame, QWidget, QFileDialog, QStackedWidget,
     QSizePolicy, QProgressBar, QMessageBox, QScrollArea, QLayout
 )
 
-from ui.theme import Theme, STEM_IDS, STEM_LABELS
+from ui.theme import Theme
 
 
 class SegmentedControl(QWidget):
@@ -314,8 +314,6 @@ class ImportDialog(QDialog):
         super().__init__(parent)
         self._theme = theme
         self._model = "htdemucs"
-        self._file_paths: list[str] = []
-        self._yt_urls:    list[str] = []
         self.setWindowTitle("Import tracks")
         self.setModal(True)
         self._setup_ui()
@@ -746,210 +744,3 @@ class ImportProgressWidget(QFrame):
             # abort_btn — abort all (or only track when total==1)
             self.reset()
             self.abort_all.emit()
-
-
-# ---------------------------------------------------------------------------
-# Processing dialog
-# ---------------------------------------------------------------------------
-
-class StemCard(QFrame):
-    def __init__(self, stem_id: str, label: str, color: str, theme: Theme, parent=None):
-        super().__init__(parent)
-        self._color = color
-        self._theme = theme
-        self._done = False
-        self.setStyleSheet(f"QFrame {{ border: 1px solid {theme.border}; border-radius: 10px; }}")
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 11, 12, 11)
-        lay.setSpacing(6)
-
-        top = QHBoxLayout()
-        dot = QFrame()
-        dot.setFixedSize(9, 9)
-        dot.setStyleSheet(f"background: {color}; border-radius: 4px;")
-        name_lbl = QLabel(label)
-        name_lbl.setStyleSheet("font-size: 12px; font-weight: 600;")
-        top.addWidget(dot)
-        top.addWidget(name_lbl)
-        top.addStretch()
-        lay.addLayout(top)
-
-        # mini waveform bars (decorative)
-        bars_row = QHBoxLayout()
-        bars_row.setSpacing(2)
-        self._bars: list[QFrame] = []
-        import random
-        rnd = random.Random(hash(stem_id))
-        for i in range(10):
-            bar = QFrame()
-            bar.setFixedWidth(6)
-            h = 4 + rnd.randint(0, 14)
-            bar.setFixedHeight(h)
-            bar.setStyleSheet(f"background: {color}; border-radius: 1px; opacity: 0.25;")
-            bars_row.addWidget(bar)
-            self._bars.append(bar)
-        bars_w = QWidget()
-        bars_w.setLayout(bars_row)
-        bars_w.setFixedHeight(26)
-        lay.addWidget(bars_w)
-
-        self._state_lbl = QLabel("waiting…")
-        self._state_lbl.setStyleSheet(
-            f"font-family: 'Consolas', monospace; font-size: 11px; color: {theme.ink3};"
-        )
-        lay.addWidget(self._state_lbl)
-
-    def set_done(self):
-        if self._done:
-            return
-        self._done = True
-        self._state_lbl.setText("✓ extracted")
-        self._state_lbl.setStyleSheet(
-            f"font-family: 'Consolas', monospace; font-size: 11px; color: {self._color}; font-weight: 600;"
-        )
-        self.setStyleSheet(f"QFrame {{ border: 1px solid {self._color}44; border-radius: 10px; }}")
-        # animate bars to full height
-        import random
-        rnd = random.Random(hash(self._color))
-        for i, bar in enumerate(self._bars):
-            h = 14 + rnd.randint(0, 12)
-            bar.setFixedHeight(h)
-            bar.setStyleSheet(f"background: {self._color}; border-radius: 1px;")
-
-
-PROC_STAGES = [
-    (0,  "Loading htdemucs model…"),
-    (14, "Decoding audio & resampling…"),
-    (28, "Computing spectrogram…"),
-    (42, "Separating sources (neural net)…"),
-    (82, "Encoding stems to FLAC…"),
-    (96, "Writing .stems package…"),
-]
-
-STEM_DONE_THRESHOLD = {"vocals": 52, "drums": 62, "bass": 72, "other": 82}
-
-
-class ProcessingDialog(QDialog):
-    """Shown while separation is running. Receives progress signals from SeparatorWorker."""
-    completed = Signal()
-    cancelled = Signal()
-
-    def __init__(self, job: dict, theme: Theme, parent=None):
-        super().__init__(parent)
-        self._theme = theme
-        self._job = job
-        self._pct = 0
-        self.setWindowTitle("Processing…")
-        self.setModal(True)
-        self.setFixedWidth(600)
-        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
-        self._setup_ui()
-        self._apply_theme()
-
-    def _setup_ui(self):
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(30, 28, 30, 24)
-        lay.setSpacing(0)
-
-        name = self._job.get("name", "New track")
-        if name:
-            name = os.path.splitext(name)[0]
-        if not name:
-            name = "New track"
-
-        # header
-        head = QHBoxLayout()
-        art = QFrame()
-        art.setFixedSize(52, 52)
-        art.setStyleSheet(f"background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #FF5A5F, stop:1 #7C5CFF); border-radius: 13px;")
-        head.addWidget(art)
-        info_lay = QVBoxLayout()
-        self._name_lbl = QLabel(name)
-        self._name_lbl.setStyleSheet("font-size: 17px; font-weight: 600;")
-        src_lbl = QLabel("Fetched from YouTube" if self._job.get("kind") == "youtube"
-                         else self._job.get("name", "Local file"))
-        src_lbl.setStyleSheet(f"font-size: 13px; color: {self._theme.ink3};")
-        info_lay.addWidget(self._name_lbl)
-        info_lay.addWidget(src_lbl)
-        head.addLayout(info_lay, 1)
-        self._pct_lbl = QLabel("0%")
-        self._pct_lbl.setStyleSheet("font-family: 'Consolas', monospace; font-size: 26px; font-weight: 600;")
-        head.addWidget(self._pct_lbl)
-        lay.addLayout(head)
-        lay.addSpacing(20)
-
-        # stage label
-        self._stage_lbl = QLabel("Initialising…")
-        self._stage_lbl.setStyleSheet(f"font-size: 13px; color: {self._theme.ink2};")
-        lay.addWidget(self._stage_lbl)
-        lay.addSpacing(8)
-
-        # progress bar
-        self._bar = QProgressBar()
-        self._bar.setRange(0, 100)
-        self._bar.setValue(0)
-        self._bar.setTextVisible(False)
-        self._bar.setFixedHeight(8)
-        self._bar.setStyleSheet(f"""
-            QProgressBar {{ background: {self._theme.surface2}; border-radius: 4px; border: none; }}
-            QProgressBar::chunk {{ background: {self._theme.accent}; border-radius: 4px; }}
-        """)
-        lay.addWidget(self._bar)
-        lay.addSpacing(22)
-
-        # stem cards
-        cards_row = QHBoxLayout()
-        cards_row.setSpacing(10)
-        self._cards: dict[str, StemCard] = {}
-        colors = ["#FF5A5F", "#F2A23A", "#7C5CFF", "#15B6A4"]
-        for sid, slbl, col in zip(STEM_IDS, STEM_LABELS, colors):
-            card = StemCard(sid, slbl, col, self._theme)
-            self._cards[sid] = card
-            cards_row.addWidget(card)
-        lay.addLayout(cards_row)
-        lay.addSpacing(20)
-
-        # footer
-        foot = QHBoxLayout()
-        foot.addStretch()
-        self._cancel_btn = QPushButton("Cancel")
-        self._cancel_btn.setProperty("role", "ghost")
-        self._cancel_btn.clicked.connect(self._on_cancel)
-        foot.addWidget(self._cancel_btn)
-        lay.addLayout(foot)
-
-    def _apply_theme(self):
-        self.setStyleSheet(f"QDialog {{ background: {self._theme.surface}; border-radius: 22px; }}")
-
-    def update_progress(self, pct: int, message: str = ""):
-        self._pct = pct
-        self._pct_lbl.setText(f"{pct}%")
-        self._bar.setValue(pct)
-        if message:
-            self._stage_lbl.setText(message)
-        else:
-            for threshold, label in reversed(PROC_STAGES):
-                if pct >= threshold:
-                    self._stage_lbl.setText(label)
-                    break
-        for sid, card in self._cards.items():
-            if pct >= STEM_DONE_THRESHOLD.get(sid, 100):
-                card.set_done()
-
-    def on_finished(self):
-        self._pct_lbl.setText("100%")
-        self._bar.setValue(100)
-        self._stage_lbl.setText("Done — opening mixer…")
-        self._cancel_btn.setEnabled(False)
-        for card in self._cards.values():
-            card.set_done()
-        QTimer.singleShot(500, self._emit_complete)
-
-    def _emit_complete(self):
-        self.completed.emit()
-        self.accept()
-
-    def _on_cancel(self):
-        self.cancelled.emit()
-        self.reject()

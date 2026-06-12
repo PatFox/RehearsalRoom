@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from PySide6.QtCore import QThread, Signal
+
 
 def from_file_tags(path: Path) -> dict:
     """Read embedded ID3 / Vorbis / MP4 tags from an audio file."""
@@ -113,6 +115,45 @@ def merge(*sources: dict) -> dict:
     for src in reversed(sources):   # later sources first, earlier override
         result.update(src)
     return result
+
+
+class MetadataWorker(QThread):
+    """Resolves track metadata off the UI thread.
+
+    Fingerprinting (fpcalc) is CPU-heavy and the AcoustID lookup is a network
+    call — neither belongs on the main thread. Emits done(meta_dict); never
+    raises (falls back to an empty dict so the import can proceed).
+    """
+
+    done = Signal(dict)
+
+    def __init__(self, audio_path: Path, yt_info: dict, api_key: str):
+        super().__init__()
+        self._audio_path = Path(audio_path)
+        self._yt_info = yt_info or {}
+        self._api_key = api_key or ""
+
+    def run(self):
+        import socket
+        meta: dict = {}
+        try:
+            tags = from_file_tags(self._audio_path)
+            yt   = from_yt_info(self._yt_info)
+            acoustid_meta: dict = {}
+            if self._api_key and not (tags.get("title") or yt.get("title")):
+                # Bound the AcoustID web lookup — pyacoustid exposes no
+                # timeout parameter of its own.
+                prev = socket.getdefaulttimeout()
+                socket.setdefaulttimeout(15)
+                try:
+                    acoustid_meta = from_acoustid(self._audio_path, self._api_key)
+                finally:
+                    socket.setdefaulttimeout(prev)
+            # File tags beat yt-dlp beat AcoustID (tags are most reliable)
+            meta = merge(acoustid_meta, yt, tags)
+        except Exception:
+            meta = {}
+        self.done.emit(meta)
 
 
 def _find_fpcalc() -> Optional[Path]:

@@ -29,6 +29,10 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
+    # Clear temp leftovers from previous runs (Windows never empties %TEMP%)
+    from core.tempdirs import sweep_stale
+    sweep_stale()
+
     app = QApplication(sys.argv)
     app.setApplicationName("Rehearsal Room")
     app.setApplicationVersion("0.1.0")

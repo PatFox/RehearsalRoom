@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from ui.theme import Theme, STEM_IDS
 from ui.library_panel import LibraryPanel
 from ui.player_panel import PlayerPanel
-from ui.import_dialog import ImportDialog, ImportProgressWidget, ProcessingDialog
+from ui.import_dialog import ImportDialog, ImportProgressWidget
 from ui.settings_dialog import SettingsDialog
 from core.separator import SeparatorWorker
 from core.downloader import DownloaderWorker
@@ -19,7 +19,7 @@ from core.project import save_stems, load_stems
 from core import settings as S
 from core.library import scan as scan_library, song_from_stems_file
 from pathlib import Path
-import tempfile, os
+import os
 
 
 def _unique_stems_path(lib_dir: Path, base_name: str) -> Path:
@@ -534,7 +534,7 @@ class MainWindow(QMainWindow):
         self._current_song: dict | None = None
         self._worker: SeparatorWorker | None = None
         self._dl_worker: DownloaderWorker | None = None
-        self._proc_dlg: ProcessingDialog | None = None
+        self._meta_worker = None
         self._pending_job: dict | None = None
         # Multi-track import queue
         self._job_queue:  list[dict] = []
@@ -728,7 +728,6 @@ class MainWindow(QMainWindow):
         self._job_total = len(jobs)
         self._auto_open_single = len(jobs) == 1
         self._last_imported_song = None
-        self._proc_dlg = None
         self._process_next_job()
 
     def _process_next_job(self):
@@ -785,7 +784,8 @@ class MainWindow(QMainWindow):
         self._worker = None
         self._pending_job = {**job, "audio_path": audio_path}
         token = self._gen
-        out_dir = Path(tempfile.mkdtemp(prefix="rehearsalroom_sep_"))
+        from core.tempdirs import make_temp_dir
+        out_dir = make_temp_dir("sep_")
         self._worker = SeparatorWorker(Path(audio_path), job.get("model", "htdemucs"), out_dir)
         self._worker.progress.connect(
             lambda pct, msg, t=token: self._on_worker_progress(pct, msg, t))
@@ -810,51 +810,64 @@ class MainWindow(QMainWindow):
             return   # stale signal from a cancelled/retired worker
         if not self._pending_job:
             return   # job was cancelled
-        job = self._pending_job or {}
+        job = self._pending_job
 
-        # --- Resolve metadata (strategies 1–3) ---
-        from core.metadata import from_file_tags, from_yt_info, from_acoustid, merge
-
-        tags = from_file_tags(Path(job.get("audio_path", job.get("path", ""))))
-        yt   = from_yt_info(job.get("yt_info", {}))
-
-        # AcoustID fingerprinting (only if key is configured and no metadata yet)
-        acoustid_meta: dict = {}
-        api_key = S.get("acoustid_api_key") or ""
-        if api_key and not (tags.get("title") or yt.get("title")):
-            self._sidebar.update_import_progress(92, "Identifying song via AcoustID…")
-            audio_path = job.get("audio_path") or job.get("path", "")
-            acoustid_meta = from_acoustid(Path(audio_path), api_key)
-
-        # Merge: file tags beat yt-dlp beat AcoustID (tags are most reliable)
-        meta = merge(acoustid_meta, yt, tags)
-
-        name = job.get("name", "")
-        fallback_title = os.path.splitext(name)[0] if name else "New Track"
-        title  = meta.get("title")  or fallback_title
-        artist = meta.get("artist") or "Unknown artist"
-
-        lib_dir = S.library_path()
-        lib_dir.mkdir(parents=True, exist_ok=True)
-        safe = "".join(c for c in title if c.isalnum() or c in " _-").strip() or "track"
-        out_path = _unique_stems_path(lib_dir, safe)
-
-        project = save_stems(
-            {k: Path(v) for k, v in stem_paths.items()},
-            out_path, title=title, artist=artist,
-            source_url=job.get("url", ""),
+        # Resolve metadata (file tags / yt-dlp / AcoustID) off the UI thread —
+        # fingerprinting and the AcoustID lookup can take seconds.
+        from core.metadata import MetadataWorker
+        self._sidebar.update_import_progress(92, "Identifying song…")
+        self._retire_worker(self._meta_worker)
+        audio_path = job.get("audio_path") or job.get("path", "")
+        self._meta_worker = MetadataWorker(
+            Path(audio_path), job.get("yt_info", {}),
+            S.get("acoustid_api_key") or "",
         )
+        tok = self._gen
+        self._meta_worker.done.connect(
+            lambda meta, t=tok, sp=stem_paths: self._finalize_import(sp, meta, t))
+        self._meta_worker.start()
 
-        new_song = song_from_stems_file(out_path) or {
-            "id": str(out_path),
-            "title": title, "artist": artist,
-            "seed": 1042,
-            "durationMs": project.manifest.duration_ms,
-            "addedLabel": "Just now",
-            "source": job.get("kind", "file"),
-            "grad": ["#2E6BFF", "#7C5CFF"],
-            "stems_path": str(out_path),
-        }
+    def _finalize_import(self, stem_paths: dict, meta: dict, token: int):
+        """Save the .stems package and update the library. Runs on the UI thread."""
+        if token != self._gen:
+            return   # batch was cancelled while metadata was resolving
+        if not self._pending_job:
+            return
+        job = self._pending_job
+
+        try:
+            name = job.get("name", "")
+            fallback_title = os.path.splitext(name)[0] if name else "New Track"
+            title  = meta.get("title")  or fallback_title
+            artist = meta.get("artist") or "Unknown artist"
+
+            self._sidebar.update_import_progress(96, "Saving stems package…")
+            lib_dir = S.library_path()
+            lib_dir.mkdir(parents=True, exist_ok=True)
+            safe = "".join(c for c in title if c.isalnum() or c in " _-").strip() or "track"
+            out_path = _unique_stems_path(lib_dir, safe)
+
+            project = save_stems(
+                {k: Path(v) for k, v in stem_paths.items()},
+                out_path, title=title, artist=artist,
+                source_url=job.get("url", ""),
+            )
+
+            new_song = song_from_stems_file(out_path) or {
+                "id": str(out_path),
+                "title": title, "artist": artist,
+                "seed": 1042,
+                "durationMs": project.manifest.duration_ms,
+                "addedLabel": "Just now",
+                "source": job.get("kind", "file"),
+                "grad": ["#2E6BFF", "#7C5CFF"],
+                "stems_path": str(out_path),
+            }
+        except Exception as exc:
+            # Never let a failed save stall the queue — report and move on.
+            import traceback
+            self._on_job_error(f"{exc}\n\n{traceback.format_exc()}", token)
+            return
 
         # Add to top of list (avoid duplicate if already scanned)
         self._songs = [s for s in self._songs if s.get("stems_path") != str(out_path)]
@@ -878,9 +891,9 @@ class MainWindow(QMainWindow):
         """
         if worker is None:
             return
-        sigs = [worker.progress, worker.finished, worker.error]
-        if hasattr(worker, "info_ready"):
-            sigs.append(worker.info_ready)
+        sigs = [getattr(worker, name) for name in
+                ("progress", "finished", "error", "info_ready", "done")
+                if hasattr(worker, name)]
         for sig in sigs:
             try:
                 sig.disconnect()
@@ -902,8 +915,10 @@ class MainWindow(QMainWindow):
         self._gen += 1
         self._retire_worker(self._worker)
         self._retire_worker(self._dl_worker)
+        self._retire_worker(self._meta_worker)
         self._worker = None
         self._dl_worker = None
+        self._meta_worker = None
         self._pending_job = None
 
     def _cancel_current_job(self):
@@ -943,6 +958,9 @@ class MainWindow(QMainWindow):
             if w and w.isRunning():
                 w.requestInterruption()
                 w.wait(3000)
+        # Remove this session's temp dirs (extracted stems, downloads, conversions)
+        from core.tempdirs import cleanup_all
+        cleanup_all()
         super().closeEvent(event)
 
     # ------------------------------------------------------------------

@@ -1159,7 +1159,8 @@ class PlayerPanel(QWidget):
                 self._transport, "show_speed_busy", Qt.ConnectionType.QueuedConnection)
             player.on_stretch_done = lambda: QMetaObject.invokeMethod(
                 self._transport, "hide_speed_busy", Qt.ConnectionType.QueuedConnection)
-        self._duration = song.get("durationMs", 180_000)
+        # `or` (not .get default) so a manifest storing 0 can't divide-by-zero in the tick loop
+        self._duration = song.get("durationMs") or 180_000
         self._time_ms = 0.0
         self._playing = False
         self._tick_timer.stop()

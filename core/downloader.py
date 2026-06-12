@@ -37,7 +37,10 @@ class DownloaderWorker(QThread):
     def __init__(self, url: str, output_dir: str | None = None):
         super().__init__()
         self.url = url
-        self.output_dir = output_dir or tempfile.mkdtemp(prefix="rehearsalroom_dl_")
+        if output_dir is None:
+            from core.tempdirs import make_temp_dir
+            output_dir = str(make_temp_dir("dl_"))
+        self.output_dir = output_dir
 
     def run(self):
         try:

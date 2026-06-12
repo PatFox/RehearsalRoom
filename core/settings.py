@@ -27,9 +27,14 @@ def load() -> dict:
 
 
 def save(settings: dict) -> None:
+    import os
     _SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(_SETTINGS_FILE, "w", encoding="utf-8") as f:
+    # Write-then-rename so a crash mid-write can't corrupt the file
+    # (it also holds favourites and play history).
+    tmp = _SETTINGS_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2)
+    os.replace(tmp, _SETTINGS_FILE)
 
 
 def get(key: str):

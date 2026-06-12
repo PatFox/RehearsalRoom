@@ -29,7 +29,8 @@ def _ensure_wav(path: Path) -> Path:
         import shutil
         ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
 
-    out = Path(tempfile.mktemp(suffix=".wav", prefix="rehearsalroom_"))
+    from core.tempdirs import make_temp_file
+    out = make_temp_file(suffix=".wav")
     no_window = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
     subprocess.run(
         [str(ffmpeg), "-y", "-i", str(path), "-ac", "2", "-ar", "44100", str(out)],
@@ -130,7 +131,8 @@ class SeparatorWorker(QThread):
             self.progress.emit(90, "Saving stems…")
 
             if self.output_dir is None:
-                out_dir = Path(tempfile.mkdtemp(prefix="rehearsalroom_sep_"))
+                from core.tempdirs import make_temp_dir
+                out_dir = make_temp_dir("sep_")
             else:
                 out_dir = Path(self.output_dir)
                 out_dir.mkdir(parents=True, exist_ok=True)
