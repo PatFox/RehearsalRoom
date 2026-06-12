@@ -369,7 +369,7 @@ class Sidebar(QFrame):
         lay.addStretch()
 
         # import progress (hidden until an import is running)
-        self._import_progress = ImportProgressWidget(theme)
+        self._import_progress = ImportProgressWidget(self._theme)
         self._import_progress.abort_requested.connect(self.abort_import)
         lay.addWidget(self._import_progress)
 
