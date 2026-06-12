@@ -6,7 +6,7 @@ from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QFrame, QWidget, QFileDialog, QStackedWidget,
-    QSizePolicy, QProgressBar, QMessageBox, QScrollArea
+    QSizePolicy, QProgressBar, QMessageBox, QScrollArea, QLayout
 )
 
 from ui.theme import Theme, STEM_IDS, STEM_LABELS
@@ -61,8 +61,12 @@ class SegmentedControl(QWidget):
         return self._active
 
 
+_AUDIO_EXTS = (".mp3", ".wav", ".flac", ".m4a", ".ogg")
+
+
 class DropZone(QFrame):
-    file_dropped = Signal(str)
+    file_dropped  = Signal(str)
+    files_dropped = Signal(list)   # list[str] — one or more audio file paths
 
     def __init__(self, theme: Theme, parent=None):
         super().__init__(parent)
@@ -78,7 +82,7 @@ class DropZone(QFrame):
         lay.setSpacing(8)
         lay.setContentsMargins(24, 22, 24, 22)
 
-        self._title = QLabel("Drop an audio file here")
+        self._title = QLabel("Drop audio files here")
         self._title.setStyleSheet("font-size: 15px; font-weight: 600;")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -119,12 +123,12 @@ class DropZone(QFrame):
             )
 
     def mousePressEvent(self, e):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open audio file", "",
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Open audio files", "",
             "Audio files (*.mp3 *.wav *.flac *.m4a *.ogg);;All files (*)"
         )
-        if path:
-            self.file_dropped.emit(path)
+        if paths:
+            self.files_dropped.emit(paths)
 
     def dragEnterEvent(self, e: QDragEnterEvent):
         if e.mimeData().hasUrls():
@@ -136,9 +140,13 @@ class DropZone(QFrame):
 
     def dropEvent(self, e: QDropEvent):
         self._apply_style(hovered=False)
-        urls = e.mimeData().urls()
-        if urls:
-            self.file_dropped.emit(urls[0].toLocalFile())
+        paths = []
+        for url in e.mimeData().urls():
+            p = url.toLocalFile()
+            if p and p.lower().endswith(_AUDIO_EXTS):
+                paths.append(p)
+        if paths:
+            self.files_dropped.emit(paths)
 
 
 class ModelOption(QFrame):
@@ -244,6 +252,10 @@ class _ItemListWidget(QWidget):
         self._items = [(k, l) for k, l in self._items if k != key]
         self._rebuild()
 
+    def _remove_clicked(self, key: str):
+        # remove() rebuilds and notifies via _on_change already.
+        self.remove(key)
+
     def keys(self) -> list[str]:
         return [k for k, _ in self._items]
 
@@ -271,13 +283,16 @@ class _ItemListWidget(QWidget):
             lbl.setToolTip(key)
 
             rm = QPushButton("×")
-            rm.setFixedSize(20, 20)
+            rm.setFixedSize(22, 22)
+            rm.setCursor(Qt.CursorShape.PointingHandCursor)
+            rm.setToolTip("Remove from queue")
             rm.setStyleSheet(
-                f"QPushButton {{ border: none; background: transparent; font-size: 14px; "
-                f"color: {t.ink3}; }}"
-                f"QPushButton:hover {{ color: #E53E3E; }}"
+                f"QPushButton {{ border: none; border-radius: 11px; "
+                f"background: {t.surface3}; font-size: 15px; font-weight: 600; "
+                f"color: {t.ink2}; padding: 0; }}"
+                f"QPushButton:hover {{ background: #E53E3E; color: white; }}"
             )
-            rm.clicked.connect(lambda _, k=key: (self.remove(k), self._on_change and self._on_change()))
+            rm.clicked.connect(lambda _, k=key: self._remove_clicked(k))
 
             rl.addWidget(lbl, 1)
             rl.addWidget(rm)
@@ -303,7 +318,6 @@ class ImportDialog(QDialog):
         self._yt_urls:    list[str] = []
         self.setWindowTitle("Import tracks")
         self.setModal(True)
-        self.setFixedWidth(540)
         self._setup_ui()
         self._apply_theme()
 
@@ -313,6 +327,11 @@ class ImportDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(24, 22, 24, 24)
         lay.setSpacing(0)
+        # Size the dialog exactly to its content (min == max == hint). This
+        # avoids the QWindowsWindow::setGeometry warning that occurs when a
+        # fixed-width / free-height dialog has to reconcile a changing minimum
+        # height against the window-frame margins.
+        lay.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
 
         # header
         head_row = QHBoxLayout()
@@ -343,6 +362,9 @@ class ImportDialog(QDialog):
 
         # stacked content
         self._stack = QStackedWidget()
+        # Pin the content width so the SetFixedSize layout resolves to a 540px
+        # dialog (492 content + 24/24 margins) regardless of child size hints.
+        self._stack.setFixedWidth(540 - 48)
 
         # ── file tab ──────────────────────────────────────────────────
         file_w = QWidget()
@@ -352,6 +374,7 @@ class ImportDialog(QDialog):
 
         self._dropzone = DropZone(self._theme)
         self._dropzone.file_dropped.connect(self._on_file_dropped)
+        self._dropzone.files_dropped.connect(self._on_files_dropped)
         file_lay.addWidget(self._dropzone)
 
         self._file_list = _ItemListWidget(self._theme)
@@ -473,6 +496,10 @@ class ImportDialog(QDialog):
     def _on_file_dropped(self, path: str):
         label = os.path.basename(path)
         self._file_list.add(path, label)
+
+    def _on_files_dropped(self, paths: list):
+        for path in paths:
+            self._file_list.add(path, os.path.basename(path))
 
     def _add_url(self):
         url = self._url_input.text().strip()
