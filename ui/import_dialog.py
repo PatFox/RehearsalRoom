@@ -5,60 +5,11 @@ from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QFrame, QWidget, QFileDialog, QStackedWidget,
+    QLineEdit, QFrame, QWidget, QFileDialog, QRadioButton, QButtonGroup,
     QSizePolicy, QProgressBar, QMessageBox, QScrollArea, QLayout
 )
 
 from ui.theme import Theme
-
-
-class SegmentedControl(QWidget):
-    tab_changed = Signal(str)
-
-    def __init__(self, tabs: list[tuple[str, str]], theme: Theme, parent=None):
-        super().__init__(parent)
-        self._theme = theme
-        self._buttons: dict[str, QPushButton] = {}
-        self._active: str = tabs[0][0]
-
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(4, 4, 4, 4)
-        lay.setSpacing(4)
-        self.setFixedHeight(46)
-
-        for key, label in tabs:
-            btn = QPushButton(label)
-            btn.setCheckable(True)
-            btn.setProperty("tab_key", key)
-            btn.clicked.connect(lambda checked, k=key: self._select(k))
-            lay.addWidget(btn)
-            self._buttons[key] = btn
-
-        self._select(self._active)
-        self._apply_theme()
-
-    def _select(self, key: str):
-        self._active = key
-        for k, btn in self._buttons.items():
-            active = k == key
-            btn.setChecked(active)
-            if active:
-                btn.setStyleSheet(
-                    f"background: {self._theme.surface}; color: {self._theme.ink}; "
-                    f"border-radius: 9px; font-weight: 600; font-size: 13px; padding: 8px;"
-                )
-            else:
-                btn.setStyleSheet(
-                    f"background: transparent; color: {self._theme.ink2}; "
-                    f"border-radius: 9px; font-size: 13px; padding: 8px;"
-                )
-        self.tab_changed.emit(key)
-
-    def _apply_theme(self):
-        self.setStyleSheet(f"background: {self._theme.surface2}; border-radius: 10px;")
-
-    def active(self) -> str:
-        return self._active
 
 
 _AUDIO_EXTS = (".mp3", ".wav", ".flac", ".m4a", ".ogg")
@@ -73,54 +24,36 @@ class DropZone(QFrame):
         self._theme = theme
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(76)
         self._setup_ui()
         self._apply_style(hovered=False)
 
     def _setup_ui(self):
         lay = QVBoxLayout(self)
         lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.setSpacing(8)
-        lay.setContentsMargins(24, 22, 24, 22)
+        lay.setSpacing(2)
+        lay.setContentsMargins(16, 14, 16, 14)
 
         self._title = QLabel("Drop audio files here")
-        self._title.setStyleSheet("font-size: 15px; font-weight: 600;")
+        self._title.setStyleSheet(
+            "font-size: 14px; font-weight: 600; background: transparent; border: none;")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        sub = QLabel("or click to browse your computer")
-        sub.setStyleSheet(f"font-size: 13px; color: {self._theme.ink3};")
+        sub = QLabel("or click to browse")
+        sub.setStyleSheet(
+            f"font-size: 12px; color: {self._theme.ink3}; background: transparent; border: none;")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        formats_row = QHBoxLayout()
-        formats_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        formats_row.setSpacing(6)
-        for fmt in ["mp3", "wav", "flac", "m4a", "ogg"]:
-            chip = QLabel(fmt.upper())
-            chip.setStyleSheet(
-                f"font-family: 'Consolas', monospace; font-size: 10px; font-weight: 600; "
-                f"background: {self._theme.surface2}; color: {self._theme.ink3}; "
-                f"padding: 3px 7px; border-radius: 5px;"
-            )
-            formats_row.addWidget(chip)
-
-        formats_w = QWidget()
-        formats_w.setLayout(formats_row)
 
         lay.addWidget(self._title)
         lay.addWidget(sub)
-        lay.addSpacing(6)
-        lay.addWidget(formats_w)
 
     def _apply_style(self, hovered: bool):
-        if hovered:
-            self.setStyleSheet(
-                f"QFrame {{ border: 1.5px dashed {self._theme.accent}; "
-                f"border-radius: 16px; background: {self._theme.accent_soft()}; }}"
-            )
-        else:
-            self.setStyleSheet(
-                f"QFrame {{ border: 1.5px dashed {self._theme.border_strong}; "
-                f"border-radius: 16px; background: transparent; }}"
-            )
+        border = self._theme.accent if hovered else self._theme.border_strong
+        bg = self._theme.accent_soft() if hovered else "transparent"
+        self.setStyleSheet(
+            f"DropZone {{ border: 1px solid {border}; "
+            f"border-radius: 4px; background: {bg}; }}"
+        )
 
     def mousePressEvent(self, e):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -149,73 +82,21 @@ class DropZone(QFrame):
             self.files_dropped.emit(paths)
 
 
-class ModelOption(QFrame):
-    selected = Signal(str)
-
-    def __init__(self, key: str, title: str, desc: str, theme: Theme, parent=None):
-        super().__init__(parent)
-        self._key = key
-        self._theme = theme
-        self._is_sel = False
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(13, 11, 13, 11)
-        lay.setSpacing(3)
-
-        top = QHBoxLayout()
-        self._title_lbl = QLabel(title)
-        self._title_lbl.setStyleSheet("font-size: 13px; font-weight: 600;")
-        self._tick = QFrame()
-        self._tick.setFixedSize(16, 16)
-        top.addWidget(self._title_lbl)
-        top.addStretch()
-        top.addWidget(self._tick)
-        lay.addLayout(top)
-
-        self._desc_lbl = QLabel(desc)
-        self._desc_lbl.setWordWrap(True)
-        self._desc_lbl.setStyleSheet(f"font-size: 11px; color: {theme.ink3};")
-        lay.addWidget(self._desc_lbl)
-
-        self._set_style(False)
-
-    def set_selected(self, sel: bool):
-        self._is_sel = sel
-        self._set_style(sel)
-
-    def _set_style(self, sel: bool):
-        if sel:
-            self.setStyleSheet(
-                f"QFrame {{ border: 1.5px solid {self._theme.accent}; border-radius: 10px; "
-                f"background: {self._theme.accent_soft()}; }}"
-            )
-            self._tick.setStyleSheet(
-                f"background: {self._theme.accent}; border-radius: 8px;"
-            )
-        else:
-            self.setStyleSheet(
-                f"QFrame {{ border: 1px solid {self._theme.border}; border-radius: 10px; background: transparent; }}"
-            )
-            self._tick.setStyleSheet(
-                f"border: 1.5px solid {self._theme.border_strong}; border-radius: 8px; background: transparent;"
-            )
-
-    def mousePressEvent(self, e):
-        self.selected.emit(self._key)
-
-
 # ---------------------------------------------------------------------------
 # _ItemListWidget — scrollable queue of labelled items with remove buttons
 # ---------------------------------------------------------------------------
 
 class _ItemListWidget(QWidget):
-    """Compact scrollable list of queued items; each row has a label + × button."""
+    """Compact scrollable list of queued items; each row has a type icon,
+    label and × button. Holds both files and YouTube URLs in one queue."""
 
-    def __init__(self, theme, parent=None):
+    # Leading glyph per item kind (Segoe UI renders both in the BMP)
+    _KIND_ICON = {"file": "♪", "youtube": "▶"}
+
+    def __init__(self, theme, parent=None, max_height: int = 108):
         super().__init__(parent)
         self._theme = theme
-        self._items: list[tuple[str, str]] = []   # (key, label)
+        self._items: list[tuple[str, str, str]] = []   # (key, label, kind)
         self._on_change: "callable | None" = None
 
         outer = QVBoxLayout(self)
@@ -225,7 +106,7 @@ class _ItemListWidget(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setMaximumHeight(108)
+        scroll.setMaximumHeight(max_height)
         scroll.setStyleSheet("background: transparent;")
 
         self._container = QWidget()
@@ -242,14 +123,14 @@ class _ItemListWidget(QWidget):
     def set_on_change(self, fn):
         self._on_change = fn
 
-    def add(self, key: str, label: str):
-        if any(k == key for k, _ in self._items):
+    def add(self, key: str, label: str, kind: str = "file"):
+        if any(k == key for k, _, _ in self._items):
             return   # deduplicate
-        self._items.append((key, label))
+        self._items.append((key, label, kind))
         self._rebuild()
 
     def remove(self, key: str):
-        self._items = [(k, l) for k, l in self._items if k != key]
+        self._items = [it for it in self._items if it[0] != key]
         self._rebuild()
 
     def _remove_clicked(self, key: str):
@@ -257,7 +138,11 @@ class _ItemListWidget(QWidget):
         self.remove(key)
 
     def keys(self) -> list[str]:
-        return [k for k, _ in self._items]
+        return [k for k, _, _ in self._items]
+
+    def items(self) -> list[tuple[str, str]]:
+        """Return (key, kind) for every queued item, in order."""
+        return [(k, kind) for k, _, kind in self._items]
 
     def count(self) -> int:
         return len(self._items)
@@ -270,15 +155,25 @@ class _ItemListWidget(QWidget):
                 item.widget().deleteLater()
 
         t = self._theme
-        for key, label in self._items:
+        for key, label, kind in self._items:
             row = QWidget()
-            row.setStyleSheet(f"background: {t.surface2}; border-radius: 6px;")
+            row.setObjectName("queueRow")
+            # Scope the fill to the row only (objectName selector) so it doesn't
+            # bleed onto the child label/icon.
+            row.setStyleSheet(
+                f"QWidget#queueRow {{ background: {t.surface2}; border-radius: 3px; }}")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(8, 4, 4, 4)
             rl.setSpacing(6)
 
+            icon = QLabel(self._KIND_ICON.get(kind, "♪"))
+            icon.setFixedWidth(14)
+            icon.setStyleSheet(f"font-size: 12px; color: {t.ink3}; background: transparent; border: none;")
+            icon.setToolTip("YouTube link" if kind == "youtube" else "Audio file")
+            rl.addWidget(icon)
+
             lbl = QLabel(label)
-            lbl.setStyleSheet(f"font-size: 12px; color: {t.ink};")
+            lbl.setStyleSheet(f"font-size: 12px; color: {t.ink}; background: transparent; border: none;")
             lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             lbl.setToolTip(key)
 
@@ -287,8 +182,8 @@ class _ItemListWidget(QWidget):
             rm.setCursor(Qt.CursorShape.PointingHandCursor)
             rm.setToolTip("Remove from queue")
             rm.setStyleSheet(
-                f"QPushButton {{ border: none; border-radius: 11px; "
-                f"background: {t.surface3}; font-size: 15px; font-weight: 600; "
+                f"QPushButton {{ border: none; border-radius: 6px; "
+                f"background: transparent; font-size: 15px; font-weight: 600; "
                 f"color: {t.ink2}; padding: 0; }}"
                 f"QPushButton:hover {{ background: #E53E3E; color: white; }}"
             )
@@ -331,123 +226,143 @@ class ImportDialog(QDialog):
         # height against the window-frame margins.
         lay.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
 
-        # header
-        head_row = QHBoxLayout()
-        head_lay = QVBoxLayout()
-        title_lbl = QLabel("Import tracks")
-        title_lbl.setStyleSheet("font-size: 19px; font-weight: 600;")
-        sub_lbl = QLabel("Split songs into vocals, drums, bass and other.")
-        sub_lbl.setStyleSheet(f"font-size: 13px; color: {self._theme.ink3};")
-        head_lay.addWidget(title_lbl)
-        head_lay.addWidget(sub_lbl)
-        close_btn = QPushButton("✕")
-        close_btn.setProperty("role", "icon")
-        close_btn.setFixedSize(32, 32)
-        close_btn.clicked.connect(self.reject)
-        head_row.addLayout(head_lay, 1)
-        head_row.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignTop)
-        lay.addLayout(head_row)
-        lay.addSpacing(4)
+        # ── two-column body: inputs left, queue right ────────────────
+        # Pin the body width so the SetFixedSize layout resolves to a stable
+        # dialog width (body + 24/24 margins). ~50% wider than the original.
+        _LEFT_W, _RIGHT_W, _GAP = 429, 375, 16
+        body = QWidget()
+        body.setFixedWidth(_LEFT_W + _GAP + _RIGHT_W)
+        # The global QWidget QSS paints a bg colour; clear it on the containers
+        # so the white dialog shows through (no grey fill around the fields).
+        body.setStyleSheet("background: transparent;")
+        cols = QHBoxLayout(body)
+        cols.setContentsMargins(0, 0, 0, 0)
+        cols.setSpacing(_GAP)
 
-        # tabs
-        self._tabs = SegmentedControl(
-            [("file", "From file"), ("youtube", "From YouTube")],
-            self._theme
-        )
-        self._tabs.tab_changed.connect(self._switch_tab)
-        lay.addWidget(self._tabs)
-        lay.addSpacing(4)
+        # --- left column: drop zone, URL paste row, quality ---
+        left = QWidget()
+        left.setFixedWidth(_LEFT_W)
+        left.setStyleSheet("background: transparent;")
+        left_lay = QVBoxLayout(left)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.setSpacing(10)
 
-        # stacked content
-        self._stack = QStackedWidget()
-        # Pin the content width so the SetFixedSize layout resolves to a 540px
-        # dialog (492 content + 24/24 margins) regardless of child size hints.
-        self._stack.setFixedWidth(540 - 48)
-
-        # ── file tab ──────────────────────────────────────────────────
-        file_w = QWidget()
-        file_lay = QVBoxLayout(file_w)
-        file_lay.setContentsMargins(0, 0, 0, 0)
-        file_lay.setSpacing(6)
+        add_lbl = QLabel("Add tracks")
+        add_lbl.setStyleSheet(
+            f"font-size: 12px; font-weight: 700; letter-spacing: 0.04em; "
+            f"color: {self._theme.ink3};")
+        left_lay.addWidget(add_lbl)
 
         self._dropzone = DropZone(self._theme)
         self._dropzone.file_dropped.connect(self._on_file_dropped)
         self._dropzone.files_dropped.connect(self._on_files_dropped)
-        file_lay.addWidget(self._dropzone)
+        left_lay.addWidget(self._dropzone)
 
-        self._file_list = _ItemListWidget(self._theme)
-        self._file_list.set_on_change(self._update_start_btn)
-        file_lay.addWidget(self._file_list)
-
-        self._stack.addWidget(file_w)
-
-        # ── youtube tab ───────────────────────────────────────────────
-        yt_w = QWidget()
-        yt_lay = QVBoxLayout(yt_w)
-        yt_lay.setContentsMargins(0, 0, 0, 0)
-        yt_lay.setSpacing(6)
-
+        # YouTube paste row — input height matches the Add button
         url_row = QHBoxLayout()
         url_row.setSpacing(8)
         self._url_input = QLineEdit()
-        self._url_input.setPlaceholderText("https://youtube.com/watch?v=…")
+        self._url_input.setPlaceholderText("…or paste a YouTube URL")
+        self._url_input.setFixedHeight(38)
+        self._url_input.setStyleSheet(
+            f"QLineEdit {{ background: transparent; "
+            f"border: 1px solid {self._theme.border_strong}; border-radius: 4px; "
+            f"padding: 0 12px; font-size: 13px; }}"
+            f"QLineEdit:focus {{ border-color: {self._theme.accent}; }}"
+        )
         self._url_input.returnPressed.connect(self._add_url)
         self._url_input.textChanged.connect(self._update_start_btn)
         url_row.addWidget(self._url_input, 1)
         add_btn = QPushButton("Add")
-        add_btn.setProperty("role", "outline")
-        add_btn.setFixedHeight(34)
+        add_btn.setFixedHeight(38)
+        add_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {self._theme.ink}; "
+            f"border: 1px solid {self._theme.border_strong}; border-radius: 4px; "
+            f"padding: 0 16px; font-size: 13px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background: {self._theme.surface2}; }}"
+        )
         add_btn.clicked.connect(self._add_url)
         url_row.addWidget(add_btn)
-        yt_lay.addLayout(url_row)
+        left_lay.addLayout(url_row)
 
-        self._yt_list = _ItemListWidget(self._theme)
-        self._yt_list.set_on_change(self._update_start_btn)
-        yt_lay.addWidget(self._yt_list)
+        # Quality — stacked radios under a heading
+        quality_lbl = QLabel("Quality")
+        quality_lbl.setStyleSheet(
+            f"font-size: 12px; font-weight: 700; letter-spacing: 0.04em; "
+            f"color: {self._theme.ink3}; margin-top: 4px;")
+        left_lay.addWidget(quality_lbl)
 
-        note = QLabel(
-            "Audio is downloaded at the highest available quality, "
-            "then separated locally. Nothing is uploaded."
-        )
-        note.setWordWrap(True)
-        note.setStyleSheet(
-            f"font-size: 12px; color: {self._theme.ink3}; margin-top: 4px;"
-        )
-        yt_lay.addWidget(note)
-        yt_lay.addStretch()
+        self._quality_group = QButtonGroup(self)
+        left_lay.addLayout(self._make_quality_option(
+            "htdemucs", "Balanced", "Fast, great for most tracks", checked=True))
+        left_lay.addLayout(self._make_quality_option(
+            "htdemucs_ft", "Fine-tuned", "Slower, cleaner separation"))
+        left_lay.addStretch()
 
-        self._stack.addWidget(yt_w)
+        cols.addWidget(left)
 
-        lay.addWidget(self._stack)
-        lay.addSpacing(10)
+        # --- right column: shared queue (files + URLs) ---
+        right = QWidget()
+        right.setFixedWidth(_RIGHT_W)
+        right.setStyleSheet("background: transparent;")
+        right_lay = QVBoxLayout(right)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(8)
 
-        # model options
-        opts_row = QHBoxLayout()
-        opts_row.setSpacing(12)
-        self._opt_balanced = ModelOption(
-            "htdemucs", "Balanced",
-            "htdemucs · fast, great for most tracks", self._theme
-        )
-        self._opt_ft = ModelOption(
-            "htdemucs_ft", "Fine-tuned",
-            "htdemucs_ft · slower, cleaner separation", self._theme
-        )
-        self._opt_balanced.selected.connect(self._select_model)
-        self._opt_ft.selected.connect(self._select_model)
-        opts_row.addWidget(self._opt_balanced)
-        opts_row.addWidget(self._opt_ft)
-        lay.addLayout(opts_row)
-        self._select_model("htdemucs")
-        lay.addSpacing(12)
+        queue_lbl = QLabel("Queue")
+        queue_lbl.setStyleSheet(
+            f"font-size: 12px; font-weight: 700; letter-spacing: 0.04em; "
+            f"color: {self._theme.ink3};")
+        right_lay.addWidget(queue_lbl)
+
+        # Bordered panel that stretches to match the height of the left column.
+        # Scope the border to the panel (objectName) so it doesn't cascade onto
+        # the inner QScrollArea, which is also a QFrame.
+        queue_panel = QFrame()
+        queue_panel.setObjectName("queuePanel")
+        queue_panel.setStyleSheet(
+            f"QFrame#queuePanel {{ border: 1px solid {self._theme.border_strong}; "
+            f"border-radius: 4px; background: {self._theme.surface}; }}")
+        qp_lay = QVBoxLayout(queue_panel)
+        qp_lay.setContentsMargins(8, 8, 8, 8)
+        qp_lay.setSpacing(0)
+
+        # No internal cap — the panel (and thus the list) fills the column.
+        self._queue = _ItemListWidget(self._theme, max_height=16_777_215)
+        self._queue.setStyleSheet("background: transparent;")
+        self._queue.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        self._queue.set_on_change(self._update_start_btn)
+        qp_lay.addWidget(self._queue, 1)
+
+        self._queue_empty = QLabel("No tracks added yet")
+        self._queue_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._queue_empty.setStyleSheet(
+            f"font-size: 12px; color: {self._theme.ink3}; border: none; background: transparent;")
+        qp_lay.addWidget(self._queue_empty, 1)
+
+        right_lay.addWidget(queue_panel, 1)
+
+        cols.addWidget(right)
+
+        lay.addWidget(body)
+        lay.addSpacing(14)
 
         # footer
         foot = QHBoxLayout()
+        foot.setSpacing(10)
         foot.addStretch()
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setProperty("role", "ghost")
         cancel_btn.clicked.connect(self.reject)
-        self._start_btn = QPushButton("✦  Choose files & separate")
-        self._start_btn.setProperty("role", "primary")
+        self._start_btn = QPushButton("Separate")
+        acc = self._theme.accent
+        self._start_btn.setStyleSheet(
+            f"QPushButton {{ background: {acc}; color: white; border: none; "
+            f"border-radius: 5px; padding: 9px 16px; font-size: 13px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background: {Theme._lighten(acc)}; }}"
+            f"QPushButton:disabled {{ background: {self._theme.surface3}; "
+            f"color: {self._theme.ink3}; }}"
+        )
         self._start_btn.setEnabled(False)
         self._start_btn.clicked.connect(self._on_start)
         foot.addWidget(cancel_btn)
@@ -456,48 +371,56 @@ class ImportDialog(QDialog):
 
     def _apply_theme(self):
         self.setStyleSheet(
-            f"QDialog {{ background: {self._theme.surface}; border-radius: 22px; }}"
+            f"QDialog {{ background: {self._theme.surface}; border-radius: 11px; }}"
         )
 
     # ------------------------------------------------------------------ helpers
 
-    def _total_count(self) -> int:
-        return self._file_list.count() + self._yt_list.count()
+    def _make_quality_option(self, key: str, title: str, desc: str, checked: bool = False):
+        """Build a stacked radio + description row for the Quality section."""
+        col = QVBoxLayout()
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+
+        rb = QRadioButton(title)
+        rb.setChecked(checked)
+        rb.setCursor(Qt.CursorShape.PointingHandCursor)
+        rb.setStyleSheet(f"QRadioButton {{ font-size: 13px; font-weight: 600; color: {self._theme.ink}; spacing: 8px; }}")
+        rb.toggled.connect(lambda on, k=key: on and self._select_model(k))
+        self._quality_group.addButton(rb)
+
+        desc_lbl = QLabel(desc)
+        desc_lbl.setStyleSheet(
+            f"font-size: 11px; color: {self._theme.ink3}; margin-left: 24px;")
+
+        col.addWidget(rb)
+        col.addWidget(desc_lbl)
+        if checked:
+            self._model = key
+        return col
 
     def _update_start_btn(self):
-        n = self._total_count()
+        n = self._queue.count()
+        self._queue_empty.setVisible(n == 0)
         if n == 0:
-            tab = self._tabs.active()
-            if tab == "file":
-                self._start_btn.setText("✦  Choose files & separate")
-                self._start_btn.setEnabled(False)
-            else:
-                self._start_btn.setText("✦  Fetch & separate")
-                # Enable as soon as there's something typed, even before Add is clicked
-                self._start_btn.setEnabled(bool(self._url_input.text().strip()))
+            # Enable as soon as a URL is typed (Add happens implicitly on start)
+            self._start_btn.setText("Separate")
+            self._start_btn.setEnabled(bool(self._url_input.text().strip()))
         else:
-            label = f"Separate {n} track{'s' if n != 1 else ''}"
-            self._start_btn.setText(f"✦  {label}")
+            self._start_btn.setText(f"Separate {n} track{'s' if n != 1 else ''}")
             self._start_btn.setEnabled(True)
-
-    def _switch_tab(self, key: str):
-        self._stack.setCurrentIndex(0 if key == "file" else 1)
-        self._update_start_btn()
 
     def _select_model(self, key: str):
         self._model = key
-        self._opt_balanced.set_selected(key == "htdemucs")
-        self._opt_ft.set_selected(key == "htdemucs_ft")
 
     # ------------------------------------------------------------------ input handlers
 
     def _on_file_dropped(self, path: str):
-        label = os.path.basename(path)
-        self._file_list.add(path, label)
+        self._queue.add(path, os.path.basename(path), kind="file")
 
     def _on_files_dropped(self, paths: list):
         for path in paths:
-            self._file_list.add(path, os.path.basename(path))
+            self._queue.add(path, os.path.basename(path), kind="file")
 
     def _add_url(self):
         url = self._url_input.text().strip()
@@ -505,44 +428,39 @@ class ImportDialog(QDialog):
             return
         # Truncate display label for very long URLs
         label = url if len(url) <= 60 else url[:57] + "…"
-        self._yt_list.add(url, label)
+        self._queue.add(url, label, kind="youtube")
         self._url_input.clear()
 
     # ------------------------------------------------------------------ start
 
     def _on_start(self):
-        # If file tab active and no files queued, open file picker first
-        if self._tabs.active() == "file" and self._file_list.count() == 0:
+        # Fold any URL still sitting in the input into the queue
+        if self._url_input.text().strip():
+            self._add_url()
+
+        # Nothing queued yet — offer the file picker as the default action
+        if self._queue.count() == 0:
             paths, _ = QFileDialog.getOpenFileNames(
                 self, "Open audio files", "",
                 "Audio files (*.mp3 *.wav *.flac *.m4a *.ogg);;All files (*)"
             )
             for p in paths:
-                self._file_list.add(p, os.path.basename(p))
-            if self._file_list.count() == 0:
-                return
-
-        # If YouTube tab active and no URLs queued, try adding current input
-        if self._tabs.active() == "youtube" and self._yt_list.count() == 0:
-            self._add_url()
-            if self._yt_list.count() == 0:
+                self._queue.add(p, os.path.basename(p), kind="file")
+            if self._queue.count() == 0:
                 return
 
         jobs: list[dict] = []
-        for path in self._file_list.keys():
-            jobs.append({
-                "kind":  "file",
-                "path":  path,
-                "model": self._model,
-                "name":  os.path.basename(path),
-            })
-        for url in self._yt_list.keys():
-            jobs.append({
-                "kind":  "youtube",
-                "url":   url,
-                "model": self._model,
-                "name":  "",
-            })
+        for key, kind in self._queue.items():
+            if kind == "youtube":
+                jobs.append({
+                    "kind": "youtube", "url": key,
+                    "model": self._model, "name": "",
+                })
+            else:
+                jobs.append({
+                    "kind": "file", "path": key,
+                    "model": self._model, "name": os.path.basename(key),
+                })
 
         if jobs:
             self.import_started.emit(jobs)
