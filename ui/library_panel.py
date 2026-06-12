@@ -5,8 +5,9 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QFrame, QSizePolicy
+    QScrollArea, QFrame, QSizePolicy, QMenu
 )
+from PySide6.QtGui import QAction
 
 import time as _time
 
@@ -87,6 +88,7 @@ class _HeaderLabel(QLabel):
 class SongRow(QFrame):
     clicked           = Signal(dict)
     favourite_toggled = Signal(str, bool)   # (song_id, is_now_favourite)
+    delete_requested  = Signal(dict)        # song dict
 
     def __init__(self, song: dict, theme: Theme, is_fav: bool = False, parent=None):
         super().__init__(parent)
@@ -158,6 +160,49 @@ class SongRow(QFrame):
         added_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         lay.addWidget(added_lbl)
 
+        # three-dot context menu button
+        self._more_btn = QPushButton("⋮")
+        self._more_btn.setFixedSize(28, 28)
+        self._more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._more_btn.setToolTip("More options")
+        self._more_btn.clicked.connect(self._show_row_menu)
+        self._more_btn.setStyleSheet(
+            "QPushButton { border: none; background: transparent; "
+            "font-size: 18px; font-weight: 700; color: transparent; padding: 0; border-radius: 6px; }"
+            "QPushButton:hover { background: rgba(0,0,0,0.08); color: #666; }"
+        )
+        lay.addWidget(self._more_btn)
+
+    # ── row context menu ─────────────────────────────────────────────────────
+
+    def _show_row_menu(self):
+        t = self._theme
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background: {t.surface};
+                border: 1px solid {t.border};
+                border-radius: 10px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 8px 18px 8px 12px;
+                font-size: 13px;
+                color: {t.ink};
+                border-radius: 6px;
+            }}
+            QMenu::item:selected {{ background: {t.surface2}; }}
+        """)
+
+        delete_action = QAction("Delete track", self)
+        delete_action.triggered.connect(lambda: self.delete_requested.emit(self._song))
+        menu.addAction(delete_action)
+
+        from PySide6.QtCore import QPoint
+        btn_rect = self._more_btn.rect()
+        pos = self._more_btn.mapToGlobal(btn_rect.bottomRight())
+        menu.exec(QPoint(pos.x() - menu.sizeHint().width(), pos.y() + 4))
+
     # ── star ─────────────────────────────────────────────────────────────────
 
     def _update_star(self):
@@ -195,15 +240,26 @@ class SongRow(QFrame):
 
     def enterEvent(self, e):
         self.setStyleSheet(f"background: {self._theme.surface2}; border-radius: 10px;")
+        self._more_btn.setStyleSheet(
+            "QPushButton { border: none; background: transparent; "
+            "font-size: 18px; font-weight: 700; color: #93939C; padding: 0; border-radius: 6px; }"
+            f"QPushButton:hover {{ background: {self._theme.surface3}; color: {self._theme.ink}; }}"
+        )
 
     def leaveEvent(self, e):
         self.setStyleSheet("background: transparent; border-radius: 10px;")
+        self._more_btn.setStyleSheet(
+            "QPushButton { border: none; background: transparent; "
+            "font-size: 18px; font-weight: 700; color: transparent; padding: 0; border-radius: 6px; }"
+            "QPushButton:hover { background: rgba(0,0,0,0.08); color: #666; }"
+        )
 
 
 class LibraryPanel(QWidget):
     song_opened       = Signal(dict)
     import_requested  = Signal()
     favourite_toggled = Signal(str, bool)
+    delete_requested  = Signal(dict)   # song dict
 
     def __init__(self, theme: Theme, parent=None):
         super().__init__(parent)
@@ -296,6 +352,9 @@ class LibraryPanel(QWidget):
                 col_head.addWidget(lbl)
             else:
                 col_head.addWidget(lbl, 1)
+
+        # spacer matching the three-dot button width in each row
+        col_head.addSpacing(28 + 10)   # button width + layout spacing
 
         self._col_head_w = QWidget()
         self._col_head_w.setLayout(col_head)
@@ -450,6 +509,7 @@ class LibraryPanel(QWidget):
             row = SongRow(song, self._theme, is_fav=song["id"] in self._favourites)
             row.clicked.connect(self.song_opened)
             row.favourite_toggled.connect(self.favourite_toggled)
+            row.delete_requested.connect(self.delete_requested)
             self._rows_lay.addWidget(row)
             self._rows.append(row)
 

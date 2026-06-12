@@ -103,6 +103,57 @@ class _ErrorDialog(QDialog):
         """)
 
 
+class _DeleteConfirmDialog(QDialog):
+    confirmed = Signal()
+
+    def __init__(self, title: str, theme: Theme, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Delete track")
+        self.setFixedWidth(420)
+        self.setModal(True)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 22)
+        lay.setSpacing(14)
+
+        heading = QLabel("Delete track?")
+        heading.setStyleSheet("font-size: 17px; font-weight: 600;")
+        lay.addWidget(heading)
+
+        body = QLabel(
+            f"<b>{title}</b> and its stem files will be permanently deleted "
+            f"from your library.<br><br>"
+            f"<span style='color:#E53E3E;'>This cannot be undone.</span>"
+        )
+        body.setWordWrap(True)
+        body.setStyleSheet(f"font-size: 13px; color: {theme.ink2};")
+        lay.addWidget(body)
+
+        foot = QHBoxLayout()
+        foot.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setProperty("role", "ghost")
+        cancel_btn.setFixedHeight(36)
+        cancel_btn.clicked.connect(self.reject)
+        foot.addWidget(cancel_btn)
+
+        delete_btn = QPushButton("Delete")
+        delete_btn.setFixedHeight(36)
+        delete_btn.setStyleSheet(
+            "QPushButton { background: #E53E3E; color: white; border-radius: 8px; "
+            "font-weight: 600; padding: 0 18px; }"
+            "QPushButton:hover { background: #C53030; }"
+        )
+        delete_btn.clicked.connect(self._on_confirm)
+        foot.addWidget(delete_btn)
+
+        lay.addLayout(foot)
+
+    def _on_confirm(self):
+        self.confirmed.emit()
+        self.accept()
+
+
 class _UpToDateDialog(QDialog):
     def __init__(self, current: str, theme: Theme, parent=None):
         super().__init__(parent)
@@ -523,6 +574,7 @@ class MainWindow(QMainWindow):
         self._library.song_opened.connect(self._open_song)
         self._library.import_requested.connect(self._open_import)
         self._library.favourite_toggled.connect(self._on_favourite_toggled)
+        self._library.delete_requested.connect(self._on_delete_track)
         self._library.set_songs(self._songs)
         self._library.set_favourites(self._favourites)
         self._library.set_last_viewed(self._last_viewed)
@@ -768,6 +820,37 @@ class MainWindow(QMainWindow):
         btn_rect = self._more_btn.rect()
         pos = self._more_btn.mapToGlobal(btn_rect.bottomRight())
         menu.exec(QPoint(pos.x() - menu.sizeHint().width(), pos.y() + 4))
+
+    def _on_delete_track(self, song: dict):
+        title = song.get("title") or "this track"
+        dlg = _DeleteConfirmDialog(title, self._theme, self)
+
+        def do_delete():
+            stems_path = song.get("stems_path")
+            if stems_path:
+                try:
+                    import os
+                    os.remove(stems_path)
+                except OSError as exc:
+                    _ErrorDialog(f"Could not delete file:\n\n{exc}", self).exec()
+                    return
+
+            # Remove from in-memory list and refresh
+            song_id = song.get("id")
+            self._songs = [s for s in self._songs if s.get("id") != song_id]
+            # Also clean up favourites / last_viewed if present
+            self._favourites.discard(song_id or "")
+            self._last_viewed.pop(song_id or "", None)
+            from core import settings as S
+            S.set_favourites(self._favourites)
+
+            self._library.set_songs(self._songs)
+            self._library.set_favourites(self._favourites)
+            self._library.set_last_viewed(self._last_viewed)
+            self._refresh_counts()
+
+        dlg.confirmed.connect(do_delete)
+        dlg.exec()
 
     def _open_settings(self):
         dlg = SettingsDialog(self._theme, self)
