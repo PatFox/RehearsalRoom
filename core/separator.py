@@ -103,6 +103,9 @@ class SeparatorWorker(QThread):
             # Demucs' apply_model accepts progress=bool and uses tqdm internally.
             # We intercept by temporarily replacing tqdm.tqdm with a subclass that
             # calls our signal on every iteration tick.
+            # NOTE: this mutates a module-level global — safe only because import
+            # jobs run strictly sequentially. If separations ever run in
+            # parallel, switch to demucs' callback API instead.
             import tqdm as _tqdm_mod
             _orig_tqdm = _tqdm_mod.tqdm
             _emit = lambda pct, msg: self.progress.emit(pct, msg)

@@ -2,6 +2,7 @@
 
 import math
 import random
+import time
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, QRect, QPointF, QRectF, QEvent
@@ -230,6 +231,11 @@ class WaveformWidget(QWidget):
         # Zoom / scroll
         self._zoom: float = 1.0
         self._scroll_frac: float = 0.0   # 0 = leftmost, 1 = rightmost
+        # Downsampled-bar cache: only progress alpha changes frame-to-frame,
+        # so the bars themselves are recomputed only when this key changes.
+        self._bars_cache: list = []
+        self._bars_key: tuple = ()
+        self._last_seek_emit: float = 0.0
         self.setMinimumHeight(40)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMouseTracking(True)
@@ -238,6 +244,7 @@ class WaveformWidget(QWidget):
     def set_data(self, data: list, color: str):
         self._data = data
         self._color = color
+        self._bars_key = ()   # invalidate the bar cache
         self.update()
 
     def set_progress(self, p: float):
@@ -288,27 +295,33 @@ class WaveformWidget(QWidget):
 
         mid, max_bar = h / 2, h * 0.42
 
-        # --- visible window in song-fraction space ---
-        vis_frac   = 1.0 / max(self._zoom, 1e-9)
-        start_frac = self._scroll_frac * (1.0 - vis_frac)
+        step = _BAR_W + _BAR_GAP
+        key  = (id(self._data), w, self._zoom, self._scroll_frac)
+        if key == self._bars_key:
+            bars = self._bars_cache
+        else:
+            # --- visible window in song-fraction space ---
+            vis_frac   = 1.0 / max(self._zoom, 1e-9)
+            start_frac = self._scroll_frac * (1.0 - vis_frac)
 
-        # Slice the high-res data to the visible portion
-        n_total    = len(self._data)
-        start_idx  = int(start_frac * n_total)
-        end_idx    = min(n_total, max(start_idx + 1, int((start_frac + vis_frac) * n_total)))
-        src        = self._data[start_idx:end_idx]
+            # Slice the high-res data to the visible portion
+            n_total    = len(self._data)
+            start_idx  = int(start_frac * n_total)
+            end_idx    = min(n_total, max(start_idx + 1, int((start_frac + vis_frac) * n_total)))
+            src        = self._data[start_idx:end_idx]
 
-        # How many fixed-width bars fit across the widget?
-        step   = _BAR_W + _BAR_GAP
-        n_bars = max(1, int(w / step))
-        n_src  = len(src)
+            # How many fixed-width bars fit across the widget?
+            n_bars = max(1, int(w / step))
+            n_src  = len(src)
 
-        # Downsample/resample src → n_bars display buckets (peak per bucket)
-        bars: list[float] = []
-        for i in range(n_bars):
-            s = int(i * n_src / n_bars)
-            e = max(s + 1, int((i + 1) * n_src / n_bars))
-            bars.append(max(src[s:e]))
+            # Downsample/resample src → n_bars display buckets (peak per bucket)
+            bars = []
+            for i in range(n_bars):
+                s = int(i * n_src / n_bars)
+                e = max(s + 1, int((i + 1) * n_src / n_bars))
+                bars.append(max(src[s:e]))
+            self._bars_cache = bars
+            self._bars_key   = key
 
         play_x = self._screen_x(self._progress)
 
@@ -376,7 +389,13 @@ class WaveformWidget(QWidget):
             self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         if self._drag_mode == "seek":
-            self.seeked.emit(self._frac(x))
+            # Throttle scrub-seeks: at tempo ≠ 1.0 every seek clears the
+            # player's chunk queue and restretches via ffmpeg, so per-pixel
+            # emits are needlessly expensive. Final position lands on release.
+            now = time.monotonic()
+            if now - self._last_seek_emit >= 0.05:
+                self._last_seek_emit = now
+                self.seeked.emit(self._frac(x))
         elif self._drag_mode == "handle_start":
             f = min(self._frac(x), self._loop_end - 0.001)
             self._loop_start = f
@@ -428,6 +447,9 @@ class WaveformWidget(QWidget):
                 self.update()
             self._drag_mode = ""
         elif e.button() == Qt.MouseButton.LeftButton:
+            if self._drag_mode == "seek":
+                # Land exactly where the drag ended (move events are throttled)
+                self.seeked.emit(self._frac(e.position().x()))
             self._drag_mode = ""
 
     def contextMenuEvent(self, e):

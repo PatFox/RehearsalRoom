@@ -1,6 +1,8 @@
 # Code Review — Rehearsal Room
 
-*Scope: full review of `core/` and `ui/` (~5,800 LOC) focused on stability, performance, and resource management. Report only — no code was changed. Every finding below was verified against the current source, with file:line references.*
+*Scope: full review of `core/` and `ui/` (~5,800 LOC) focused on stability, performance, and resource management. Every finding below was verified against the source at review time, with file:line references.*
+
+> **Resolution status:** All High (H1–H4), Medium (M1–M7), and Low (L1–L13) findings have been fixed in follow-up commits. Line numbers below refer to the pre-fix code. Only the "Deferred / at-scale" items remain open by design.
 
 ---
 

@@ -649,22 +649,17 @@ class LibraryPanel(QWidget):
 
     def _rebuild_rows_by_artist(self, songs: list[dict]):
         """Build the artist-grouped layout: artist header then track rows (no artist column)."""
-        # Group by artist name (case-insensitive key, display original)
-        from collections import defaultdict
-        groups: dict[str, list[dict]] = defaultdict(list)
-        order: list[str] = []
+        # Group by artist, case-insensitively; first-seen capitalisation wins.
+        groups: dict[str, tuple[str, list[dict]]] = {}   # lower -> (canonical, songs)
         for song in songs:
-            key = (song.get("artist") or "Unknown artist").strip()
+            key = (song.get("artist") or "Unknown artist").strip() or "Unknown artist"
             norm = key.lower()
-            if norm not in [k.lower() for k in order]:
-                order.append(key)
-            # Find the canonical key already in groups (preserving first-seen capitalisation)
-            canon = next((k for k in groups if k.lower() == norm), key)
-            groups[canon].append(song)
+            if norm not in groups:
+                groups[norm] = (key, [])
+            groups[norm][1].append(song)
 
-        for artist in sorted(order, key=str.lower):
-            canon = next((k for k in groups if k.lower() == artist.lower()), artist)
-            group_songs = groups[canon]
+        for norm in sorted(groups):
+            canon, group_songs = groups[norm]
             header = ArtistGroupHeader(canon, len(group_songs), self._theme)
             self._rows_lay.addWidget(header)
             for song in sorted(group_songs, key=lambda s: (s.get("title") or "").lower()):

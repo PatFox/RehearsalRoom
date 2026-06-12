@@ -381,12 +381,14 @@ class StemLane(QFrame):
 
     def set_audible(self, audible: bool):
         from PySide6.QtWidgets import QGraphicsOpacityEffect
-        if audible:
-            self.setGraphicsEffect(None)
-        else:
-            effect = QGraphicsOpacityEffect(self)
-            effect.setOpacity(0.38)
-            self.setGraphicsEffect(effect)
+        # One effect per lane, toggled — setGraphicsEffect(None) destroys the
+        # effect, so recreating it on every mute/solo click would churn.
+        if not hasattr(self, "_dim_effect"):
+            self._dim_effect = QGraphicsOpacityEffect(self)
+            self._dim_effect.setOpacity(0.38)
+            self._dim_effect.setEnabled(False)
+            self.setGraphicsEffect(self._dim_effect)
+        self._dim_effect.setEnabled(not audible)
         self._wave.set_muted(not audible)
         color = "#93939C" if not audible else self._theme.ink
         self._name_lbl._label.setStyleSheet(

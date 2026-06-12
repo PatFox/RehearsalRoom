@@ -105,7 +105,10 @@ def from_acoustid(audio_path: Path, api_key: str) -> dict:
             return best
         return {}
 
-    except Exception:
+    except Exception as exc:
+        from core.log import get_logger
+        get_logger("metadata").warning("AcoustID lookup failed for %s: %s",
+                                       audio_path, exc)
         return {}
 
 

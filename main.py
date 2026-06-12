@@ -7,6 +7,8 @@ import os
 # are None. Several libraries (torch.hub, tqdm, etc.) write to them
 # unconditionally and crash with "NoneType has no attribute 'write'".
 # Redirect to devnull so those writes are silently dropped.
+# These handles are intentionally never closed — they must outlive every
+# thread that might write to stdout/stderr, i.e. the whole process.
 if sys.stdout is None:
     sys.stdout = open(os.devnull, "w")
 if sys.stderr is None:

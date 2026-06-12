@@ -710,6 +710,14 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _on_import_started(self, jobs: list):
+        # Drop anything already queued or currently processing (same file
+        # picked twice, same URL pasted again).
+        def _key(j: dict) -> str:
+            return j.get("path") or j.get("url") or ""
+        existing = {_key(j) for j in self._job_queue}
+        if self._pending_job:
+            existing.add(_key(self._pending_job))
+        jobs = [j for j in jobs if _key(j) not in existing]
         if not jobs:
             return
         # If a batch is already running, append to it instead of overwriting.
@@ -944,8 +952,14 @@ class MainWindow(QMainWindow):
         if token is not None and token != self._gen:
             return   # stale error from a cancelled/retired worker
         self._pending_job = None
-        # Skip the failed track and continue with the rest
-        _ErrorDialog(f"Processing failed:\n\n{msg}", self).exec()
+        # Drop the failed track from the batch count (same as a manual skip)
+        if self._job_total > 0:
+            self._job_total -= 1
+        # Non-modal so an unattended error doesn't pause the rest of the queue
+        dlg = _ErrorDialog(f"Processing failed:\n\n{msg}", self)
+        dlg.setModal(False)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dlg.show()
         self._process_next_job()
 
     def closeEvent(self, event):

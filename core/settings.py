@@ -21,8 +21,10 @@ def load() -> dict:
             with open(_SETTINGS_FILE, encoding="utf-8") as f:
                 data = json.load(f)
             return {**_DEFAULTS, **data}
-        except Exception:
-            pass
+        except Exception as exc:
+            from core.log import get_logger
+            get_logger("settings").warning(
+                "settings.json unreadable, using defaults: %s", exc)
     return dict(_DEFAULTS)
 
 

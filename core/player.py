@@ -101,7 +101,21 @@ def _stretch_chunk(
 
 class StemPlayer:
     """Plays multiple stems simultaneously with per-stem volume/mute/solo
-    and near-instant pitch-preserving tempo control via chunked rubberband."""
+    and near-instant pitch-preserving tempo control via chunked rubberband.
+
+    Threading contract
+    ------------------
+    Three threads touch this object:
+      * UI thread        — all public methods (load/play/seek/set_*…)
+      * fill thread      — `_fill_loop` (produces stretched chunks)
+      * audio callback   — `_callback` (sounddevice's thread, consumes chunks)
+
+    `_queue_lock` guards: `_queue`, `_chunk_off`, `_src_pos`, `_fill_pos`,
+    `_fill_gen`. The callback snapshots state under the lock and re-validates
+    before advancing, so a seek/tempo-change mid-callback is safe.
+    `_volumes`/`_mutes`/`_solos`/`_master`/`_playing` are read without the
+    lock — single writer (UI thread), atomic reads, momentary staleness is
+    acceptable for mixing decisions."""
 
     def __init__(self):
         self._stems:   dict[str, np.ndarray] = {}   # original loaded audio [samples, ch]
@@ -128,6 +142,9 @@ class StemPlayer:
         self._queue:      deque = deque()
         self._queue_lock: threading.Lock = threading.Lock()
         self._chunk_off:  int = 0    # playback offset inside the front chunk (stretched samples)
+        # Generation counter — bumped on load/seek/tempo-change so a fill
+        # thread that was mid-stretch can't append a stale chunk afterwards.
+        self._fill_gen:   int = 0
 
         # Fill thread
         self._fill_event: threading.Event = threading.Event()
@@ -168,13 +185,14 @@ class StemPlayer:
         self._target_tempo = 1.0
         with self._queue_lock:
             self._queue.clear()
+            self._fill_gen += 1
         self._start_fill_thread()
 
     def play(self) -> None:
         import sounddevice as sd
         if self._playing or not self._stems:
             return
-        if self._stream is None or not self._stream.active:
+        if self._stream is None:
             self._stream = sd.OutputStream(
                 samplerate=self._sr,
                 channels=2,
@@ -184,10 +202,32 @@ class StemPlayer:
                 finished_callback=self._on_finished,
             )
         self._playing = True
-        self._stream.start()
+        if not self._stream.active:
+            try:
+                self._stream.start()
+            except Exception:
+                # Stream couldn't be restarted (e.g. after CallbackStop on
+                # some hosts) — recreate it.
+                try:
+                    self._stream.close()
+                except Exception:
+                    pass
+                self._stream = sd.OutputStream(
+                    samplerate=self._sr,
+                    channels=2,
+                    dtype="float32",
+                    blocksize=1024,
+                    callback=self._callback,
+                    finished_callback=self._on_finished,
+                )
+                self._stream.start()
 
     def pause(self) -> None:
         self._playing = False
+        # Stop the stream so the callback isn't burning CPU outputting
+        # silence and the audio device is released while paused.
+        if self._stream and self._stream.active:
+            self._stream.stop()
 
     def stop(self) -> None:
         self._playing = False
@@ -205,6 +245,7 @@ class StemPlayer:
             self._src_pos  = target_src
             self._fill_pos = target_src
             self._chunk_off = 0
+            self._fill_gen += 1
         self._fill_event.set()
 
     def position_ms(self) -> float:
@@ -232,6 +273,7 @@ class StemPlayer:
             self._fill_pos = self._src_pos   # re-fill from current position
             self._queue.clear()
             self._chunk_off = 0
+            self._fill_gen += 1
         self._fill_event.set()
         if self.on_stretch_started:
             self.on_stretch_started()
@@ -271,17 +313,22 @@ class StemPlayer:
 
     def _fill_loop(self) -> None:
         """Continuously keeps the chunk queue filled ahead of the playhead."""
-        while not self._stop_fill:
+        me = threading.current_thread()
+        # `self._fill_thread is me` lets a zombie thread from a previous
+        # load() (whose join timed out) exit instead of competing with the
+        # replacement thread.
+        while not self._stop_fill and self._fill_thread is me:
             self._fill_event.wait()
             self._fill_event.clear()
-            if self._stop_fill:
+            if self._stop_fill or self._fill_thread is not me:
                 break
 
-            while not self._stop_fill:
+            while not self._stop_fill and self._fill_thread is me:
                 with self._queue_lock:
                     queue_depth = len(self._queue)
                     fill_pos    = self._fill_pos
                     rate        = self._target_tempo
+                    gen         = self._fill_gen
 
                 if queue_depth >= QUEUE_DEPTH:
                     break   # queue is full — wait for callback to consume a chunk
@@ -301,9 +348,9 @@ class StemPlayer:
                 # Stretch
                 stretched = _stretch_chunk(stems_slice, self._sr, rate, ctx_len)
 
-                # Check if a seek/tempo-change cleared the queue while we were working
+                # Check if a load/seek/tempo-change invalidated this work
                 with self._queue_lock:
-                    if self._fill_pos == fill_pos:   # still valid
+                    if self._fill_gen == gen and self._fill_pos == fill_pos:
                         self._queue.append((fill_pos, stretched))
                         self._fill_pos = end
                         self._tempo    = rate
@@ -321,15 +368,18 @@ class StemPlayer:
         written  = 0
 
         while written < frames and self._playing:
+            # Snapshot the front chunk and our offset under the lock so a
+            # concurrent seek/tempo-change can't shift state mid-read.
             with self._queue_lock:
                 if not self._queue:
                     # Queue empty — fill thread is catching up; output silence
                     break
                 src_start, chunks = self._queue[0]
+                chunk_off = self._chunk_off
 
             # Determine how many frames from this chunk we can use
             chunk_len   = len(next(iter(chunks.values())))
-            remaining   = chunk_len - self._chunk_off
+            remaining   = chunk_len - chunk_off
             to_read     = min(frames - written, remaining)
 
             for stem_id, chunk in chunks.items():
@@ -338,22 +388,23 @@ class StemPlayer:
                 if not any_solo and self._mutes.get(stem_id, False):
                     continue
                 vol = self._volumes.get(stem_id, 1.0)
-                sl  = chunk[self._chunk_off: self._chunk_off + to_read]
+                sl  = chunk[chunk_off: chunk_off + to_read]
                 out[written: written + len(sl)] += sl * vol
 
-            self._chunk_off += to_read
-            written         += to_read
+            written += to_read
 
-            # Advance src_pos: each stretched sample corresponds to rate original samples
+            # Commit the advance only if no seek replaced the front chunk
+            # while we were mixing; otherwise restart from the new state.
             rate = self._tempo if abs(self._tempo) > 1e-6 else 1.0
-            self._src_pos = src_start + int(self._chunk_off * rate)
-
-            if self._chunk_off >= chunk_len:
-                with self._queue_lock:
-                    if self._queue and self._queue[0][0] == src_start:
-                        self._queue.popleft()
-                self._chunk_off = 0
-                self._fill_event.set()   # wake fill thread
+            with self._queue_lock:
+                if not (self._queue and self._queue[0][0] == src_start):
+                    break   # seek/tempo-change happened mid-mix
+                self._chunk_off = chunk_off + to_read
+                self._src_pos   = src_start + int(self._chunk_off * rate)
+                if self._chunk_off >= chunk_len:
+                    self._queue.popleft()
+                    self._chunk_off = 0
+                    self._fill_event.set()   # wake fill thread
 
         np.clip(out * self._master, -1.0, 1.0, out=out)
         outdata[:] = out

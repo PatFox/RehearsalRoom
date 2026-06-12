@@ -3,8 +3,11 @@
 import time
 from pathlib import Path
 
+from core.log import get_logger
 from core.project import read_manifest
 from core.settings import library_path as get_library_path
+
+_log = get_logger("library")
 
 _GRAD_PALETTE = [
     ["#FF5A5F", "#7C5CFF"],
@@ -55,7 +58,8 @@ def song_from_stems_file(stems_path: Path) -> dict | None:
             "file_size": file_size,
             "_mtime": mtime,
         }
-    except Exception:
+    except Exception as exc:
+        _log.warning("Could not read %s — file skipped: %s", stems_path, exc)
         return None
 
 

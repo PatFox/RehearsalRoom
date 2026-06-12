@@ -60,6 +60,8 @@ class ModelDownloadWorker(QThread):
                     return result
 
             self.progress.emit(1, "Preparing model download…")
+            # NOTE: module-global mutation — safe only because this runs once,
+            # at first launch, before any other tqdm user exists.
             _tqdm_mod.tqdm = _ProgressTqdm
             try:
                 from demucs.pretrained import get_model
