@@ -38,6 +38,37 @@ def _encode_opus(wav_path: Path, opus_path: Path, bitrate: str = "128k") -> None
     )
 
 
+def _encode_flac(src_path: Path, flac_path: Path) -> None:
+    """Encode any ffmpeg-readable audio to FLAC (lossless, stereo 44.1 kHz)."""
+    subprocess.run(
+        [_ffmpeg(), "-y", "-i", str(src_path),
+         "-ac", "2", "-ar", "44100", "-c:a", "flac", str(flac_path)],
+        check=True, **_subprocess_kwargs(),
+    )
+
+
+EXPORT_FORMATS = [("FLAC", ".flac"), ("WAV", ".wav"), ("MP3", ".mp3"),
+                  ("OGG", ".ogg"), ("M4A", ".m4a")]
+
+_EXPORT_CODECS = {
+    ".flac": ["-c:a", "flac"],
+    ".wav":  ["-c:a", "pcm_s16le"],
+    ".mp3":  ["-c:a", "libmp3lame", "-q:a", "2"],
+    ".ogg":  ["-c:a", "libvorbis", "-q:a", "5"],
+    ".m4a":  ["-c:a", "aac", "-b:a", "256k"],
+}
+
+
+def transcode_audio(src_path: Path, dest_path: Path) -> None:
+    """Convert any ffmpeg-readable audio to the format implied by dest's suffix."""
+    dest_path = Path(dest_path)
+    codec = _EXPORT_CODECS.get(dest_path.suffix.lower(), [])
+    subprocess.run(
+        [_ffmpeg(), "-y", "-i", str(src_path), *codec, str(dest_path)],
+        check=True, **_subprocess_kwargs(),
+    )
+
+
 def _decode_to_wav(src_path: Path, wav_path: Path) -> None:
     """Decode any ffmpeg-readable audio file to WAV (for soundfile compatibility)."""
     subprocess.run(
@@ -103,6 +134,7 @@ class StemsManifest:
     artist: str = ""
     source_url: str = ""
     duration_ms: int = 0
+    original: str = ""   # filename of the embedded original mix, "" if none
     stems: list[StemInfo] = field(default_factory=list)
     loops: list[SavedLoop] = field(default_factory=list)
 
@@ -121,6 +153,7 @@ class StemsManifest:
             artist=d.get("artist", ""),
             source_url=d.get("source_url", ""),
             duration_ms=d.get("duration_ms", 0),
+            original=d.get("original", ""),
             stems=stems,
             loops=loops,
         )
@@ -141,8 +174,13 @@ def save_stems(
     source_url: str = "",
     stem_labels: Optional[dict[str, str]] = None,
     cover: Optional[bytes] = None,
+    original_path: Optional[Path] = None,
 ) -> StemsProject:
-    """Encode WAV stem files to Opus and pack into a .stems ZIP archive."""
+    """Encode WAV stem files to Opus and pack into a .stems ZIP archive.
+
+    If *original_path* is given, the source mix is embedded losslessly (FLAC)
+    as ``original.flac`` so the full track can always be recovered.
+    """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -167,11 +205,23 @@ def save_stems(
             label = (stem_labels or {}).get(stem_id, stem_id.capitalize())
             stem_infos.append(StemInfo(id=stem_id, file=f"{stem_id}.opus", label=label))
 
+        # Embed the original mix (FLAC — lossless, ~half the size of WAV)
+        original_arc = ""
+        original_flac: Optional[Path] = None
+        if original_path and Path(original_path).exists():
+            original_flac = tmp_dir / "original.flac"
+            try:
+                _encode_flac(Path(original_path), original_flac)
+                original_arc = "original.flac"
+            except Exception:
+                original_flac = None   # don't fail the whole save over the copy
+
         manifest = StemsManifest(
             title=title,
             artist=artist,
             source_url=source_url,
             duration_ms=duration_ms,
+            original=original_arc,
             stems=stem_infos,
         )
 
@@ -181,6 +231,8 @@ def save_stems(
                 zf.write(opus_path, f"{stem_id}.opus")
             if cover:
                 zf.writestr("cover.jpg", cover)
+            if original_flac and original_flac.exists():
+                zf.write(original_flac, original_arc)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -221,6 +273,23 @@ def load_stems(stems_path: Path, extract_dir: Optional[Path] = None) -> StemsPro
             stem_paths[s.id] = src
 
     return StemsProject(manifest=manifest, stem_paths=stem_paths, source_path=stems_path)
+
+
+def extract_original(stems_path: Path, dest_dir: Path) -> Optional[Path]:
+    """Extract the embedded original mix to *dest_dir*, or None if absent."""
+    stems_path = Path(stems_path)
+    manifest = read_manifest(stems_path)
+    if not manifest.original:
+        return None
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(stems_path, "r") as zf:
+        if manifest.original not in zf.namelist():
+            return None
+        out = dest_dir / manifest.original
+        with zf.open(manifest.original) as src, open(out, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+    return out
 
 
 def read_manifest(stems_path: Path) -> StemsManifest:

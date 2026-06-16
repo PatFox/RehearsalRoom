@@ -938,7 +938,7 @@ class MetaDialog(QDialog):
 
 class PlayerPanel(QWidget):
     back_clicked  = Signal()
-    export_clicked = Signal(dict)
+    export_clicked = Signal(dict, str)   # song, mode ("all" | "current" | "original")
     save_metadata  = Signal(dict)
     loop_save_requested = Signal(object)   # SavedLoop — MainWindow writes to disk
     loop_delete_requested = Signal(str)    # loop name
@@ -1047,10 +1047,10 @@ class PlayerPanel(QWidget):
             chips_row.addWidget(w)
         top_lay.addLayout(chips_row)
 
-        self._export_btn = QPushButton("Export")
+        self._export_btn = QPushButton("Export  ▾")
         self._export_btn.setProperty("role", "ghost")
         self._export_btn.setFixedHeight(34)
-        self._export_btn.clicked.connect(self._on_export)
+        self._export_btn.clicked.connect(self._show_export_menu)
         top_lay.addWidget(self._export_btn)
 
         root.addWidget(self._topbar)
@@ -1498,9 +1498,33 @@ class PlayerPanel(QWidget):
                 self._lanes[sid].update_name(lbl)
         self.save_metadata.emit(data)
 
-    def _on_export(self):
-        if self._song:
-            self.export_clicked.emit(self._song)
+    def audio_player(self):
+        """The live StemPlayer for the current song (or None)."""
+        return self._player
+
+    def _show_export_menu(self):
+        if not self._song:
+            return
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QAction
+        from PySide6.QtCore import QPoint
+        t = self._theme
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{ background: {t.surface}; border: 1px solid {t.border};
+                     border-radius: 4px; padding: 4px; }}
+            QMenu::item {{ padding: 8px 18px 8px 12px; font-size: 13px;
+                           color: {t.ink}; border-radius: 4px; }}
+            QMenu::item:selected {{ background: {t.surface2}; }}
+        """)
+        for label, mode in [("All (.stems package)", "all"),
+                            ("Current mix…", "current"),
+                            ("Original audio…", "original")]:
+            act = QAction(label, self)
+            act.triggered.connect(lambda _=False, m=mode: self.export_clicked.emit(self._song, m))
+            menu.addAction(act)
+        pos = self._export_btn.mapToGlobal(self._export_btn.rect().bottomRight())
+        menu.exec(QPoint(pos.x() - menu.sizeHint().width(), pos.y() + 4))
 
     # ------------------------------------------------------------------
     # Keyboard

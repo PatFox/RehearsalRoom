@@ -563,6 +563,7 @@ class MainWindow(QMainWindow):
         self._dl_worker: DownloaderWorker | None = None
         self._meta_worker = None
         self._load_worker: _TrackLoadWorker | None = None
+        self._export_worker = None
         self._pending_job: dict | None = None
         # Multi-track import queue
         self._job_queue:  list[dict] = []
@@ -897,10 +898,12 @@ class MainWindow(QMainWindow):
             safe = "".join(c for c in title if c.isalnum() or c in " _-").strip() or "track"
             out_path = _unique_stems_path(lib_dir, safe)
 
+            original_path = job.get("audio_path") or job.get("path", "")
             project = save_stems(
                 {k: Path(v) for k, v in stem_paths.items()},
                 out_path, title=title, artist=artist,
                 source_url=job.get("url", ""), cover=cover,
+                original_path=Path(original_path) if original_path else None,
             )
 
             new_song = song_from_stems_file(out_path) or {
@@ -1011,6 +1014,8 @@ class MainWindow(QMainWindow):
         self._library.stop_background()
         if self._load_worker is not None and self._load_worker.isRunning():
             self._load_worker.wait(3000)
+        if self._export_worker is not None and self._export_worker.isRunning():
+            self._export_worker.wait(5000)
         # Give cooperative workers a moment to unwind so Qt doesn't report a
         # thread being destroyed while still running.
         for w in list(self._retired_workers):
@@ -1228,18 +1233,112 @@ class MainWindow(QMainWindow):
     # Export
     # ------------------------------------------------------------------
 
-    def _on_export(self, song: dict):
+    def _on_export(self, song: dict, mode: str = "all"):
         stems_path = song.get("stems_path")
         if not stems_path:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.information(self, "Export", "This is a demo track — no .stems file to export.")
             return
+        if mode == "current":
+            self._export_current(song)
+        elif mode == "original":
+            self._export_original(song)
+        else:
+            self._export_all(song)
+
+    def _export_all(self, song: dict):
         from PySide6.QtWidgets import QFileDialog, QMessageBox
         import shutil
-        dest, _ = QFileDialog.getSaveFileName(self, "Export .stems file", f"{song['title']}.stems", "Stems files (*.stems)")
+        dest, _ = QFileDialog.getSaveFileName(
+            self, "Export .stems file", f"{song['title']}.stems", "Stems files (*.stems)")
         if dest:
-            shutil.copy2(stems_path, dest)
+            shutil.copy2(song["stems_path"], dest)
             QMessageBox.information(self, "Exported", f"Saved to {dest}")
+
+    def _ask_export_format(self) -> str | None:
+        """Prompt for an export format; returns the file extension (e.g. '.flac')."""
+        from PySide6.QtWidgets import QInputDialog
+        from core.project import EXPORT_FORMATS
+        names = [n for n, _ in EXPORT_FORMATS]
+        name, ok = QInputDialog.getItem(
+            self, "Export format", "Format:", names, 0, False)
+        if not ok:
+            return None
+        return dict(EXPORT_FORMATS)[name]
+
+    def _export_current(self, song: dict):
+        from PySide6.QtWidgets import QFileDialog
+        player = self._player.audio_player()
+        if player is None or not player.has_audio():
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Export", "No audio is loaded for this track.")
+            return
+        ext = self._ask_export_format()
+        if not ext:
+            return
+        dest, _ = QFileDialog.getSaveFileName(
+            self, "Export current mix", f"{song['title']} (mix){ext}", f"Audio (*{ext})")
+        if not dest:
+            return
+        from core.export import ExportWorker
+        self._start_export(ExportWorker("current", dest, player=player), "Exporting current mix")
+
+    def _export_original(self, song: dict):
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        # Cheap manifest check before prompting — avoids extracting just to learn there's none.
+        try:
+            from core.project import read_manifest
+            has_original = bool(read_manifest(song["stems_path"]).original)
+        except Exception as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
+            return
+        if not has_original:
+            QMessageBox.information(
+                self, "Export",
+                "This track has no embedded original audio (it was imported "
+                "before originals were stored).")
+            return
+        ext = self._ask_export_format()
+        if not ext:
+            return
+        dest, _ = QFileDialog.getSaveFileName(
+            self, "Export original audio", f"{song['title']} (original){ext}", f"Audio (*{ext})")
+        if not dest:
+            return
+        from core.export import ExportWorker
+        self._start_export(
+            ExportWorker("original", dest, stems_path=song["stems_path"]),
+            "Exporting original audio")
+
+    def _start_export(self, worker, title: str):
+        """Run an ExportWorker with a modal busy dialog; report the result."""
+        from PySide6.QtWidgets import QProgressDialog, QMessageBox
+        from PySide6.QtCore import Qt
+        dlg = QProgressDialog("Preparing…", "", 0, 0, self)   # 0,0 = busy indicator
+        dlg.setWindowTitle(title)
+        dlg.setCancelButton(None)
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+
+        self._retire_worker(self._export_worker)
+        self._export_worker = worker
+        worker.progress.connect(dlg.setLabelText)
+
+        def _ok(dest: str):
+            dlg.close()
+            QMessageBox.information(self, "Exported", f"Saved to {dest}")
+
+        def _err(msg: str):
+            dlg.close()
+            QMessageBox.warning(self, "Export failed", msg)
+
+        worker.done.connect(_ok)
+        worker.error.connect(_err)
+        worker.finished.connect(lambda: setattr(self, "_export_worker", None))
+        worker.start()
+        dlg.show()
 
     # ------------------------------------------------------------------
     # Theme

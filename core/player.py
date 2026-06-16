@@ -278,6 +278,40 @@ class StemPlayer:
         if self.on_stretch_started:
             self.on_stretch_started()
 
+    def has_audio(self) -> bool:
+        return bool(self._stems)
+
+    def render_current_mix(self, out_path) -> None:
+        """Render the current mix (volumes, mute/solo, master, tempo) to WAV.
+
+        Mirrors the mixing the realtime callback does, applied to the whole
+        track in one pass — used by the 'Export · Current' action.
+        """
+        from pathlib import Path
+        if not self._stems:
+            raise RuntimeError("No audio loaded.")
+
+        any_solo = any(self._solos.values())
+        mix = np.zeros((self._max_src, 2), dtype=np.float32)
+        for sid, data in self._stems.items():
+            if any_solo and not self._solos.get(sid):
+                continue
+            if not any_solo and self._mutes.get(sid, False):
+                continue
+            vol = self._volumes.get(sid, 1.0)
+            mix[: len(data)] += data * vol
+
+        mix *= self._master
+        np.clip(mix, -1.0, 1.0, out=mix)
+
+        # Apply the current speed (pitch-preserving) in one rubberband pass.
+        rate = self._target_tempo
+        if abs(rate - 1.0) > 0.005:
+            mix = _rubberband_chunk(mix, self._sr, rate)
+            np.clip(mix, -1.0, 1.0, out=mix)
+
+        sf.write(str(Path(out_path)), mix, self._sr)
+
     # ────────────────────────────────────────────────── waveform / metadata ──
 
     def waveform_data(self, stem_id: str, n_buckets: int = 320) -> list[float]:
