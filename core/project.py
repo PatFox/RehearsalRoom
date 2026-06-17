@@ -275,6 +275,40 @@ def load_stems(stems_path: Path, extract_dir: Optional[Path] = None) -> StemsPro
     return StemsProject(manifest=manifest, stem_paths=stem_paths, source_path=stems_path)
 
 
+def set_original(stems_path: Path, audio_path: Path) -> None:
+    """Embed *audio_path* (FLAC-encoded) as the original mix in an existing
+    .stems file, updating the manifest. Preserves the file's mtime so the
+    library ordering/"added" label doesn't shift. Best-effort — raises on
+    hard failures so callers can ignore them.
+    """
+    import os
+    from core.tempdirs import make_temp_dir
+    stems_path = Path(stems_path)
+    manifest = read_manifest(stems_path)
+    manifest.original = "original.flac"
+
+    tmp = make_temp_dir("setorig_")
+    flac = tmp / "original.flac"
+    _encode_flac(Path(audio_path), flac)
+
+    orig_stat = stems_path.stat()
+    tmp_zip = stems_path.with_suffix(".stems.tmp")
+    try:
+        with zipfile.ZipFile(stems_path, "r") as zin, \
+             zipfile.ZipFile(tmp_zip, "w", compression=zipfile.ZIP_STORED) as zout:
+            for item in zin.infolist():
+                if item.filename in ("manifest.json", "original.flac"):
+                    continue   # rewritten / replaced below
+                zout.writestr(item, zin.read(item.filename))
+            zout.writestr("manifest.json", json.dumps(manifest.to_dict(), indent=2))
+            zout.write(flac, "original.flac")
+        os.replace(tmp_zip, stems_path)
+        os.utime(stems_path, (orig_stat.st_atime, orig_stat.st_mtime))
+    finally:
+        if tmp_zip.exists():
+            tmp_zip.unlink(missing_ok=True)
+
+
 def extract_original(stems_path: Path, dest_dir: Path) -> Optional[Path]:
     """Extract the embedded original mix to *dest_dir*, or None if absent."""
     stems_path = Path(stems_path)

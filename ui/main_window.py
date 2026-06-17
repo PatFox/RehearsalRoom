@@ -1288,15 +1288,18 @@ class MainWindow(QMainWindow):
         # Cheap manifest check before prompting — avoids extracting just to learn there's none.
         try:
             from core.project import read_manifest
-            has_original = bool(read_manifest(song["stems_path"]).original)
+            manifest = read_manifest(song["stems_path"])
         except Exception as exc:
             QMessageBox.warning(self, "Export failed", str(exc))
             return
-        if not has_original:
+        has_original = bool(manifest.original)
+        source_url   = manifest.source_url
+        if not has_original and not source_url:
             QMessageBox.information(
                 self, "Export",
-                "This track has no embedded original audio (it was imported "
-                "before originals were stored).")
+                "This track has no embedded original audio, and no source URL "
+                "to re-fetch it from (it was imported from a file before "
+                "originals were stored).")
             return
         ext = self._ask_export_format()
         if not ext:
@@ -1306,9 +1309,14 @@ class MainWindow(QMainWindow):
         if not dest:
             return
         from core.export import ExportWorker
-        self._start_export(
-            ExportWorker("original", dest, stems_path=song["stems_path"]),
-            "Exporting original audio")
+        if has_original:
+            worker = ExportWorker("original", dest, stems_path=song["stems_path"])
+        else:
+            # Missing original but we have the YouTube link — re-fetch it, and
+            # backfill it into the .stems file so it's embedded next time.
+            worker = ExportWorker("youtube", dest, url=source_url,
+                                  stems_path=song["stems_path"])
+        self._start_export(worker, "Exporting original audio")
 
     def _start_export(self, worker, title: str):
         """Run an ExportWorker with a modal busy dialog; report the result."""

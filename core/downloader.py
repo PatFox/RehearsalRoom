@@ -28,6 +28,110 @@ class _Cancelled(Exception):
     """Raised internally to unwind run() cleanly when the worker is cancelled."""
 
 
+class DownloadError(Exception):
+    """Raised by fetch_audio() on an unrecoverable download/convert failure."""
+
+
+def fetch_audio(url, output_dir=None, progress=None, on_info=None, should_cancel=None):
+    """Download a YouTube URL to a WAV file.
+
+    Returns (wav_path, yt_info_dict). Raises DownloadError on failure or
+    _Cancelled if *should_cancel* returns True at a checkpoint.
+
+    progress(pct:int, msg:str)  — optional progress callback
+    on_info(title:str, artist:str) — optional, fired once metadata is known
+    should_cancel() -> bool     — optional cooperative-cancel check
+    """
+    import yt_dlp
+
+    if output_dir is None:
+        from core.tempdirs import make_temp_dir
+        output_dir = str(make_temp_dir("dl_"))
+
+    def _progress(pct, msg):
+        if progress:
+            progress(pct, msg)
+
+    def _check_cancel():
+        if should_cancel and should_cancel():
+            raise _Cancelled
+
+    ffmpeg_exe, ffmpeg_dir = _get_ffmpeg()
+    _progress(5, "Connecting to YouTube…")
+
+    raw_template = os.path.join(output_dir, "raw.%(ext)s")
+    _ydl_errors: list[str] = []
+
+    class _Logger:
+        def debug(self, msg):   pass
+        def info(self, msg):    pass
+        def warning(self, msg): _ydl_errors.append(f"WARNING: {msg}")
+        def error(self, msg):   _ydl_errors.append(f"ERROR: {msg}")
+
+    def _hook(d: dict):
+        _check_cancel()
+        if d["status"] == "downloading":
+            try:
+                total = d.get("total_bytes") or d.get("total_bytes_estimate") or 1
+                pct = d.get("downloaded_bytes", 0) / total
+                _progress(int(10 + pct * 6), f"Downloading… {int(pct * 100)}%")
+            except Exception:
+                pass
+
+    ydl_opts = {
+        "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
+        "outtmpl": raw_template,
+        "quiet": True,
+        "no_warnings": False,
+        "socket_timeout": 30,
+        "retries": 5,
+        "fragment_retries": 5,
+        "ffmpeg_location": ffmpeg_dir,
+        "progress_hooks": [_hook],
+        "logger": _Logger(),
+    }
+
+    _progress(10, "Fetching audio info…")
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        yt_info = ydl.extract_info(url, download=True) or {}
+
+    if not yt_info:
+        detail = "\n".join(_ydl_errors) if _ydl_errors else "No details available."
+        raise DownloadError(f"yt-dlp could not fetch the video.\n\n{detail}")
+
+    if on_info:
+        from core.metadata import from_yt_info
+        meta = from_yt_info(yt_info)
+        if meta.get("title"):
+            on_info(meta["title"], meta.get("artist", ""))
+
+    raw_path = None
+    for f in sorted(os.listdir(output_dir)):
+        if f.startswith("raw."):
+            raw_path = os.path.join(output_dir, f)
+            break
+    if not raw_path:
+        detail = "\n".join(_ydl_errors) if _ydl_errors else ""
+        raise DownloadError(
+            "Download finished but no audio file was found.\n\n"
+            + (detail or "Check that the URL is a public YouTube video."))
+    if os.path.getsize(raw_path) < 1024:
+        raise DownloadError(f"Downloaded file is too small and likely corrupt: {raw_path}")
+
+    _progress(16, "Converting to WAV…")
+    wav_path = os.path.join(output_dir, "audio.wav")
+    no_window = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+    result = subprocess.run(
+        [ffmpeg_exe, "-y", "-i", raw_path, "-ac", "2", "-ar", "44100", wav_path],
+        capture_output=True, text=True, **no_window,
+    )
+    if result.returncode != 0:
+        raise DownloadError(f"ffmpeg conversion failed:\n{result.stderr[-800:]}")
+
+    _check_cancel()
+    return wav_path, yt_info
+
+
 class DownloaderWorker(QThread):
     progress = Signal(int, str)
     info_ready = Signal(str, str)  # title, artist — emitted once metadata is known
@@ -44,89 +148,14 @@ class DownloaderWorker(QThread):
 
     def run(self):
         try:
-            import yt_dlp
-
-            ffmpeg_exe, ffmpeg_dir = _get_ffmpeg()
-            self.progress.emit(5, "Connecting to YouTube…")
-
-            raw_template = os.path.join(self.output_dir, "raw.%(ext)s")
-
-            # Collect yt-dlp warnings/errors so silent failures surface in our UI.
-            _ydl_errors: list[str] = []
-
-            class _Logger:
-                def debug(self, msg):   pass
-                def info(self, msg):    pass
-                def warning(self, msg): _ydl_errors.append(f"WARNING: {msg}")
-                def error(self, msg):   _ydl_errors.append(f"ERROR: {msg}")
-
-            ydl_opts = {
-                "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
-                "outtmpl": raw_template,
-                "quiet": True,
-                "no_warnings": False,
-                "socket_timeout": 30,       # don't hang indefinitely
-                "retries": 5,
-                "fragment_retries": 5,
-                "ffmpeg_location": ffmpeg_dir,
-                "progress_hooks": [self._hook],
-                "logger": _Logger(),
-            }
-
-            self.progress.emit(10, "Fetching audio info…")
-            yt_info: dict = {}
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                yt_info = ydl.extract_info(self.url, download=True) or {}
-
-            if not yt_info:
-                detail = "\n".join(_ydl_errors) if _ydl_errors else "No details available."
-                self.error.emit(f"yt-dlp could not fetch the video.\n\n{detail}")
-                return
-
-            # Surface the song name / artist so the UI can stop showing the raw URL.
-            from core.metadata import from_yt_info
-            meta = from_yt_info(yt_info)
-            title = meta.get("title", "")
-            if title:
-                self.info_ready.emit(title, meta.get("artist", ""))
-
-            # Find the downloaded file
-            raw_path = None
-            for f in sorted(os.listdir(self.output_dir)):
-                if f.startswith("raw."):
-                    raw_path = os.path.join(self.output_dir, f)
-                    break
-
-            if not raw_path:
-                detail = "\n".join(_ydl_errors) if _ydl_errors else ""
-                self.error.emit(
-                    "Download finished but no audio file was found.\n\n"
-                    + (detail or "Check that the URL is a public YouTube video.")
-                )
-                return
-
-            if os.path.getsize(raw_path) < 1024:
-                self.error.emit(f"Downloaded file is too small and likely corrupt: {raw_path}")
-                return
-
-            self.progress.emit(16, "Converting to WAV…")
-
-            wav_path = os.path.join(self.output_dir, "audio.wav")
-            no_window = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
-            result = subprocess.run(
-                [ffmpeg_exe, "-y", "-i", raw_path, "-ac", "2", "-ar", "44100", wav_path],
-                capture_output=True, text=True, **no_window,
+            wav_path, yt_info = fetch_audio(
+                self.url, self.output_dir,
+                progress=lambda pct, msg: self.progress.emit(pct, msg),
+                on_info=lambda title, artist: self.info_ready.emit(title, artist),
+                should_cancel=self.isInterruptionRequested,
             )
-            if result.returncode != 0:
-                self.error.emit(f"ffmpeg conversion failed:\n{result.stderr[-800:]}")
-                return
-
-            if self.isInterruptionRequested():
-                raise _Cancelled
-
             self.progress.emit(18, "Download complete. Starting separation…")
             self.finished.emit(wav_path, yt_info)
-
         except _Cancelled:
             return   # cancelled — exit quietly, emit nothing
         except Exception as exc:
@@ -134,15 +163,3 @@ class DownloaderWorker(QThread):
                 return   # error caused by teardown during cancel — ignore
             import traceback
             self.error.emit(f"{exc}\n\n{traceback.format_exc()}")
-
-    def _hook(self, d: dict):
-        # Cooperative cancel point — raises out of yt-dlp's download loop.
-        if self.isInterruptionRequested():
-            raise _Cancelled
-        if d["status"] == "downloading":
-            try:
-                total = d.get("total_bytes") or d.get("total_bytes_estimate") or 1
-                pct = d.get("downloaded_bytes", 0) / total
-                self.progress.emit(int(10 + pct * 6), f"Downloading… {int(pct * 100)}%")
-            except Exception:
-                pass
