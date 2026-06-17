@@ -415,6 +415,12 @@ class StemLane(QFrame):
     def update_name(self, name: str):
         self._name_lbl.setText(name)
 
+    def reflect_muted(self, muted: bool):
+        """Sync the M button + dimming to an externally-set mute state."""
+        self._mute_btn.setChecked(muted)
+        self._mute_btn._apply()
+        self.set_audible(not muted)
+
 
 # ---------------------------------------------------------------------------
 # Transport bar
@@ -939,6 +945,7 @@ class MetaDialog(QDialog):
 class PlayerPanel(QWidget):
     back_clicked  = Signal()
     export_clicked = Signal(dict, str)   # song, mode ("all" | "current" | "original")
+    reseparate_clicked = Signal(dict)    # song
     save_metadata  = Signal(dict)
     loop_save_requested = Signal(object)   # SavedLoop — MainWindow writes to disk
     loop_delete_requested = Signal(str)    # loop name
@@ -1046,6 +1053,14 @@ class PlayerPanel(QWidget):
             w.setLayout(col)
             chips_row.addWidget(w)
         top_lay.addLayout(chips_row)
+
+        self._resep_btn = QPushButton("Re-separate")
+        self._resep_btn.setProperty("role", "ghost")
+        self._resep_btn.setFixedHeight(34)
+        self._resep_btn.setToolTip("Re-run stem separation from the original audio")
+        self._resep_btn.clicked.connect(
+            lambda: self._song and self.reseparate_clicked.emit(self._song))
+        top_lay.addWidget(self._resep_btn)
 
         self._export_btn = QPushButton("Export  ▾")
         self._export_btn.setProperty("role", "ghost")
@@ -1187,6 +1202,14 @@ class PlayerPanel(QWidget):
         self._solos = {s: False for s in STEM_IDS}
         self._volumes = {s: 100 for s in STEM_IDS}
         self._stem_labels = {s: STEM_LABELS[i] for i, s in enumerate(STEM_IDS)}
+
+        # An embedded original mix shows as an extra lane, muted by default.
+        self._has_original = bool(player is not None and "original" in player.stem_ids())
+        if self._has_original:
+            self._mutes["original"] = True
+            self._solos["original"] = False
+            self._volumes["original"] = 100
+            self._stem_labels["original"] = "Original"
         self._loop_state    = 0
         self._loop_start_ms = -1.0
         self._loop_end_ms   = -1.0
@@ -1227,8 +1250,20 @@ class PlayerPanel(QWidget):
         if player is not None:
             for sid in STEM_IDS:
                 waveforms[sid] = player.waveform_data(sid, 4000)
+            if self._has_original:
+                waveforms["original"] = player.waveform_data("original", 4000)
 
         self._rebuild_lanes(song, waveforms)
+
+    def _connect_lane(self, lane: "StemLane"):
+        lane.mute_toggled.connect(self._on_mute)
+        lane.solo_toggled.connect(self._on_solo)
+        lane.volume_changed.connect(self._on_volume)
+        lane.seek_requested.connect(lambda p: self._seek(p, user_initiated=True))
+        lane.loop_set.connect(self._set_loop_from_fracs)
+        lane.loop_cleared.connect(self._clear_loop)
+        lane.handle_moved.connect(self._on_handle_moved)
+        lane.zoom_scroll_changed.connect(self._on_zoom_scroll)
 
     def _rebuild_lanes(self, song: dict, waveforms: dict | None = None):
         # remove old lanes
@@ -1236,6 +1271,11 @@ class PlayerPanel(QWidget):
             self._lanes_lay.removeWidget(lane)
             lane.deleteLater()
         self._lanes.clear()
+        # remove the original-lane spacer from a previous song, if any
+        if getattr(self, "_orig_spacer", None) is not None:
+            self._lanes_lay.removeWidget(self._orig_spacer)
+            self._orig_spacer.deleteLater()
+            self._orig_spacer = None
 
         seed = song.get("seed", 1)
         colors = [self._theme.stem_color(s) for s in STEM_IDS]
@@ -1244,18 +1284,26 @@ class PlayerPanel(QWidget):
             # Real waveform data if available, else procedural fallback
             wdata = (waveforms or {}).get(sid) or gen_waveform(seed, sid, 4000)
             lane = StemLane(sid, slbl, col, wdata, self._theme)
-            lane.mute_toggled.connect(self._on_mute)
-            lane.solo_toggled.connect(self._on_solo)
-            lane.volume_changed.connect(self._on_volume)
-            lane.seek_requested.connect(lambda p: self._seek(p, user_initiated=True))
-            lane.loop_set.connect(self._set_loop_from_fracs)
-            lane.loop_cleared.connect(self._clear_loop)
-            lane.handle_moved.connect(self._on_handle_moved)
-            lane.zoom_scroll_changed.connect(self._on_zoom_scroll)
+            self._connect_lane(lane)
             lane.label_changed.connect(self._on_stem_label_committed)
             self._lanes_lay.insertWidget(self._lanes_lay.count() - 1, lane)
             self._lanes[sid] = lane
             self._stem_labels[sid] = slbl
+
+        # Original mix lane — below the stems, slightly separated, black, muted.
+        if getattr(self, "_has_original", False):
+            self._orig_spacer = QWidget()
+            self._orig_spacer.setFixedHeight(14)
+            self._orig_spacer.setStyleSheet("background: transparent;")
+            self._lanes_lay.insertWidget(self._lanes_lay.count() - 1, self._orig_spacer)
+
+            black = "#111111" if not self._theme.dark else "#E8E8E8"
+            wdata = (waveforms or {}).get("original") or gen_waveform(seed, "other", 4000)
+            lane = StemLane("original", "Original", black, wdata, self._theme)
+            self._connect_lane(lane)   # no label_changed — 'Original' isn't renamable
+            self._lanes_lay.insertWidget(self._lanes_lay.count() - 1, lane)
+            self._lanes["original"] = lane
+            lane.reflect_muted(True)
 
     # ------------------------------------------------------------------
     # Playback
@@ -1437,8 +1485,8 @@ class PlayerPanel(QWidget):
         self._solos[stem_id] = soloed
         self._refresh_audibility()
         if self._player:
-            for sid in STEM_IDS:
-                any_solo = any(self._solos.values())
+            any_solo = any(self._solos.values())
+            for sid in self._lanes:
                 audible = (self._solos[sid] if any_solo else not self._mutes[sid])
                 self._player.set_mute(sid, not audible)
 

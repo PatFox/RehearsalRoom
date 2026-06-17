@@ -281,6 +281,9 @@ class StemPlayer:
     def has_audio(self) -> bool:
         return bool(self._stems)
 
+    def stem_ids(self) -> list:
+        return list(self._stems.keys())
+
     def render_current_mix(self, out_path) -> None:
         """Render the current mix (volumes, mute/solo, master, tempo) to WAV.
 

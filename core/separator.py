@@ -51,6 +51,93 @@ class _Cancelled(Exception):
     """Raised internally to unwind run() cleanly when the worker is cancelled."""
 
 
+def separate_audio(audio_path, model_name="htdemucs", output_dir=None,
+                   progress=None, should_cancel=None) -> dict:
+    """Split *audio_path* into stems with Demucs. Returns {stem_id: wav_path_str}.
+
+    progress(pct:int, msg:str) — optional callback. should_cancel() -> bool —
+    optional cooperative-cancel check (raises _Cancelled when True).
+    """
+    from demucs.pretrained import get_model
+    from demucs.apply import apply_model
+
+    def _p(pct, msg):
+        if progress:
+            progress(pct, msg)
+
+    def _cc():
+        if should_cancel and should_cancel():
+            raise _Cancelled
+
+    audio_path = _ensure_wav(Path(audio_path))
+    _cc()
+
+    _p(5, "Loading model…")
+    model = get_model(model_name)
+    model.eval()
+    _cc()
+
+    _p(15, "Loading audio…")
+    data, sr = sf.read(str(audio_path), dtype="float32", always_2d=True)
+    wav = torch.from_numpy(data.T)   # [channels, samples]
+    if wav.shape[0] == 1:
+        wav = wav.repeat(2, 1)
+    elif wav.shape[0] > 2:
+        wav = wav[:2]
+    wav = _resample(wav, sr, model.samplerate)
+
+    # Normalise (Demucs convention). Keep mean/std so the output can be
+    # de-normalised back to the original level — without this the stems come
+    # out scaled by ~1/std (much too loud / clipping).
+    ref = wav.mean(0)
+    ref_mean = ref.mean()
+    ref_std  = ref.std()
+    wav = (wav - ref_mean) / (ref_std + 1e-8)
+    wav = wav.unsqueeze(0)
+
+    _p(20, "Separating stems (this may take a few minutes)…")
+
+    # Intercept demucs' internal tqdm to surface progress.
+    import tqdm as _tqdm_mod
+    _orig_tqdm = _tqdm_mod.tqdm
+
+    class _SignalTqdm(_orig_tqdm):
+        def update(self, n=1):
+            _cc()   # cooperative cancel point, fired frequently
+            result = super().update(n)
+            if self.total:
+                frac = min(1.0, self.n / self.total)
+                _p(20 + int(frac * 70), f"Separating… {int(frac * 100)}%")
+            return result
+
+    _tqdm_mod.tqdm = _SignalTqdm
+    try:
+        with torch.no_grad():
+            sources = apply_model(model, wav, progress=True, num_workers=0)
+    finally:
+        _tqdm_mod.tqdm = _orig_tqdm
+
+    _p(90, "Saving stems…")
+    if output_dir is None:
+        from core.tempdirs import make_temp_dir
+        out_dir = make_temp_dir("sep_")
+    else:
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+    stem_paths: dict[str, str] = {}
+    sources = sources[0]                       # [stems, channels, samples]
+    sources = sources * ref_std + ref_mean     # de-normalise to original level
+    for idx, name in enumerate(model.sources):
+        out_path = out_dir / f"{name}.wav"
+        sf.write(str(out_path), sources[idx].cpu().numpy().T, model.samplerate)
+        stem_paths[name] = str(out_path)
+
+    _cc()
+    _p(100, "Done.")
+    return stem_paths
+
+
 class SeparatorWorker(QThread):
     progress = Signal(int, str)   # percent, status message
     finished = Signal(dict)       # stem_id -> Path (WAV)
@@ -65,96 +152,12 @@ class SeparatorWorker(QThread):
 
     def run(self):
         try:
-            from demucs.pretrained import get_model
-            from demucs.apply import apply_model
-
-            # Convert to WAV if needed (handles mp3, m4a, ogg, etc.)
-            audio_path = _ensure_wav(self.audio_path)
-            if self.isInterruptionRequested():
-                raise _Cancelled
-
-            self.progress.emit(5, "Loading model…")
-            model = get_model(self.model_name)
-            model.eval()
-            if self.isInterruptionRequested():
-                raise _Cancelled
-
-            self.progress.emit(15, "Loading audio…")
-            data, sr = sf.read(str(audio_path), dtype="float32", always_2d=True)
-            # soundfile → [samples, channels]; Demucs needs [channels, samples]
-            wav = torch.from_numpy(data.T)
-
-            # Ensure stereo
-            if wav.shape[0] == 1:
-                wav = wav.repeat(2, 1)
-            elif wav.shape[0] > 2:
-                wav = wav[:2]
-
-            # Resample to model sample rate if needed
-            wav = _resample(wav, sr, model.samplerate)
-
-            # Normalise (Demucs convention)
-            ref = wav.mean(0)
-            wav = (wav - ref.mean()) / (ref.std() + 1e-8)
-            wav = wav.unsqueeze(0)  # add batch dim → [1, channels, samples]
-
-            self.progress.emit(20, "Separating stems (this may take a few minutes)…")
-
-            # Demucs' apply_model accepts progress=bool and uses tqdm internally.
-            # We intercept by temporarily replacing tqdm.tqdm with a subclass that
-            # calls our signal on every iteration tick.
-            # NOTE: this mutates a module-level global — safe only because import
-            # jobs run strictly sequentially. If separations ever run in
-            # parallel, switch to demucs' callback API instead.
-            import tqdm as _tqdm_mod
-            _orig_tqdm = _tqdm_mod.tqdm
-            _emit = lambda pct, msg: self.progress.emit(pct, msg)
-            worker = self
-
-            class _SignalTqdm(_orig_tqdm):
-                def update(self, n=1):
-                    # Cooperative cancel point — fires frequently during the
-                    # (slow) separation loop, so a skip/abort takes effect within
-                    # a chunk instead of after the whole track.
-                    if worker.isInterruptionRequested():
-                        raise _Cancelled
-                    result = super().update(n)
-                    if self.total:
-                        frac = min(1.0, self.n / self.total)
-                        _emit(20 + int(frac * 70), f"Separating… {int(frac * 100)}%")
-                    return result
-
-            _tqdm_mod.tqdm = _SignalTqdm
-            try:
-                with torch.no_grad():
-                    sources = apply_model(model, wav, progress=True, num_workers=0)
-            finally:
-                _tqdm_mod.tqdm = _orig_tqdm
-
-            self.progress.emit(90, "Saving stems…")
-
-            if self.output_dir is None:
-                from core.tempdirs import make_temp_dir
-                out_dir = make_temp_dir("sep_")
-            else:
-                out_dir = Path(self.output_dir)
-                out_dir.mkdir(parents=True, exist_ok=True)
-
-            stem_paths: dict[str, Path] = {}
-            sources = sources[0]  # remove batch dim → [stems, channels, samples]
-            for idx, name in enumerate(model.sources):
-                stem_wav = sources[idx]  # [channels, samples]
-                out_path = out_dir / f"{name}.wav"
-                # Write via soundfile — no torchaudio backend involved
-                audio_np = stem_wav.cpu().numpy().T  # → [samples, channels]
-                sf.write(str(out_path), audio_np, model.samplerate)
-                stem_paths[name] = out_path
-
-            if self.isInterruptionRequested():
-                raise _Cancelled
-
-            self.progress.emit(100, "Done.")
-            self.finished.emit({k: str(v) for k, v in stem_paths.items()})
+            stem_paths = separate_audio(
+                self.audio_path, self.model_name, self.output_dir,
+                progress=lambda pct, msg: self.progress.emit(pct, msg),
+                should_cancel=self.isInterruptionRequested,
+            )
+            self.finished.emit(stem_paths)
 
         except _Cancelled:
             return   # cancelled — exit quietly, emit nothing

@@ -531,16 +531,33 @@ class _TrackLoadWorker(QThread):
 
     def run(self):
         try:
-            from core.project import load_stems, read_manifest
+            from core.project import load_stems, read_manifest, extract_original
             from core.player import StemPlayer
             loops = []
             try:
-                loops = read_manifest(Path(self._stems_path)).loops
+                manifest = read_manifest(Path(self._stems_path))
+                loops = manifest.loops
             except Exception:
+                manifest = None
                 loops = []
+
             project = load_stems(Path(self._stems_path))
+            stem_paths = dict(project.stem_paths)
+
+            # Load the embedded original (if any) as an extra 'original' stem.
+            if manifest is not None and manifest.original:
+                try:
+                    from core.tempdirs import make_temp_dir
+                    orig = extract_original(Path(self._stems_path), make_temp_dir("orig_"))
+                    if orig:
+                        stem_paths["original"] = orig
+                except Exception:
+                    pass
+
             player = StemPlayer()
-            player.load(project.stem_paths)
+            player.load(stem_paths)
+            if "original" in stem_paths:
+                player.set_mute("original", True)   # muted by default
             self.loaded.emit(player, loops)
         except Exception as exc:
             import traceback
@@ -564,6 +581,7 @@ class MainWindow(QMainWindow):
         self._meta_worker = None
         self._load_worker: _TrackLoadWorker | None = None
         self._export_worker = None
+        self._resep_worker = None
         self._pending_job: dict | None = None
         # Multi-track import queue
         self._job_queue:  list[dict] = []
@@ -656,6 +674,7 @@ class MainWindow(QMainWindow):
         self._player = PlayerPanel(self._theme)
         self._player.back_clicked.connect(self._go_library)
         self._player.export_clicked.connect(self._on_export)
+        self._player.reseparate_clicked.connect(self._on_reseparate)
         self._player.save_metadata.connect(self._on_save_metadata)
         self._player.loop_save_requested.connect(self._on_loop_save)
         self._player.loop_delete_requested.connect(self._on_loop_delete)
@@ -1016,6 +1035,9 @@ class MainWindow(QMainWindow):
             self._load_worker.wait(3000)
         if self._export_worker is not None and self._export_worker.isRunning():
             self._export_worker.wait(5000)
+        if self._resep_worker is not None and self._resep_worker.isRunning():
+            self._resep_worker.requestInterruption()
+            self._resep_worker.wait(5000)
         # Give cooperative workers a moment to unwind so Qt doesn't report a
         # thread being destroyed while still running.
         for w in list(self._retired_workers):
@@ -1245,6 +1267,73 @@ class MainWindow(QMainWindow):
             self._export_original(song)
         else:
             self._export_all(song)
+
+    def _on_reseparate(self, song: dict):
+        from PySide6.QtWidgets import QMessageBox
+        stems_path = song.get("stems_path")
+        if not stems_path:
+            QMessageBox.information(self, "Re-separate", "This is a demo track.")
+            return
+        # Don't collide with an import or another re-separation.
+        if self._pending_job or self._job_queue or (
+                self._resep_worker is not None and self._resep_worker.isRunning()):
+            QMessageBox.information(
+                self, "Re-separate",
+                "Please wait for the current import / re-separation to finish.")
+            return
+        # Needs original audio or a source URL to re-fetch from.
+        try:
+            from core.project import read_manifest
+            m = read_manifest(stems_path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Re-separate", str(exc))
+            return
+        if not m.original and not m.source_url:
+            QMessageBox.information(
+                self, "Re-separate",
+                "This track has no original audio and no source URL, so its "
+                "stems can't be regenerated.")
+            return
+
+        if QMessageBox.question(
+                self, "Re-separate stems",
+                f"Re-run stem separation for “{song['title']}”?\n\n"
+                "This takes a few minutes and replaces the current stems. "
+                "You can keep using the app while it runs.",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+
+        from core.reseparate import ReseparateWorker
+        self._retire_worker(self._resep_worker)
+        self._resep_worker = ReseparateWorker(stems_path)
+        self._sidebar.show_import_progress(song.get("title", "Track"), 1, 1)
+        self._resep_worker.progress.connect(self._sidebar.update_import_progress)
+        self._resep_worker.done.connect(lambda p, s=song: self._on_reseparate_done(s, p))
+        self._resep_worker.error.connect(self._on_reseparate_error)
+        self._resep_worker.start()
+
+    def _on_reseparate_done(self, song: dict, stems_path: str):
+        self._sidebar.finish_import_progress()
+        self._resep_worker = None
+        # Refresh the song's cached fields (size/duration may have changed).
+        from core.library import song_from_stems_file
+        fresh = song_from_stems_file(Path(stems_path))
+        if fresh:
+            for i, s in enumerate(self._songs):
+                if s.get("stems_path") == stems_path:
+                    fresh["loops"] = s.get("loops")   # keep any in-memory loops
+                    self._songs[i] = fresh
+                    break
+            self._library.set_songs(self._songs)
+        # If the user is still viewing this track, reload it with the new stems.
+        if (self._stack.currentIndex() == 1 and self._current_song
+                and self._current_song.get("stems_path") == stems_path):
+            self._open_song(fresh or self._current_song)
+
+    def _on_reseparate_error(self, msg: str):
+        self._resep_worker = None
+        self._sidebar.reset_import_progress()
+        _ErrorDialog(f"Re-separation failed:\n\n{msg}", self).exec()
 
     def _export_all(self, song: dict):
         from PySide6.QtWidgets import QFileDialog, QMessageBox
