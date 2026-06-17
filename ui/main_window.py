@@ -522,7 +522,7 @@ class _FootswitchFilter(QObject):
 
 class _TrackLoadWorker(QThread):
     """Loads a .stems file and builds its StemPlayer off the UI thread."""
-    loaded = Signal(object, object)   # StemPlayer, loops(list)
+    loaded = Signal(object, object, object)   # StemPlayer, loops(list), tabs(list)
     error  = Signal(str)
 
     def __init__(self, stems_path: str, parent=None):
@@ -558,7 +558,8 @@ class _TrackLoadWorker(QThread):
             player.load(stem_paths)
             if "original" in stem_paths:
                 player.set_mute("original", True)   # muted by default
-            self.loaded.emit(player, loops)
+            tabs = manifest.tabs if manifest is not None else []
+            self.loaded.emit(player, loops, tabs)
         except Exception as exc:
             import traceback
             self.error.emit(f"{exc}\n\n{traceback.format_exc()}")
@@ -675,6 +676,7 @@ class MainWindow(QMainWindow):
         self._player.back_clicked.connect(self._go_library)
         self._player.export_clicked.connect(self._on_export)
         self._player.reseparate_clicked.connect(self._on_reseparate)
+        self._player.tab_changed.connect(self._on_tab_changed)
         self._player.save_metadata.connect(self._on_save_metadata)
         self._player.loop_save_requested.connect(self._on_loop_save)
         self._player.loop_delete_requested.connect(self._on_loop_delete)
@@ -709,6 +711,7 @@ class MainWindow(QMainWindow):
         if not stems_path:
             # No audio to load — open immediately.
             song.setdefault("loops", [])
+            song.setdefault("tabs", [])
             self._enter_player(song, None)
             return
 
@@ -717,15 +720,16 @@ class MainWindow(QMainWindow):
         self._library.show_loading(song["id"])
         self._load_worker = _TrackLoadWorker(stems_path, self)
         self._load_worker.loaded.connect(
-            lambda player, loops, s=song: self._on_track_loaded(s, player, loops))
+            lambda player, loops, tabs, s=song: self._on_track_loaded(s, player, loops, tabs))
         self._load_worker.error.connect(
             lambda msg, s=song: self._on_track_load_error(s, msg))
         self._load_worker.start()
 
-    def _on_track_loaded(self, song: dict, audio_player, loops: list):
+    def _on_track_loaded(self, song: dict, audio_player, loops: list, tabs: list):
         self._library.clear_loading()
         self._load_worker = None
         song["loops"] = loops
+        song["tabs"] = tabs
         self._enter_player(song, audio_player)
 
     def _on_track_load_error(self, song: dict, msg: str):
@@ -1250,6 +1254,19 @@ class MainWindow(QMainWindow):
             self._refresh_counts()
         except Exception as exc:
             _ErrorDialog(f"Could not delete loop:\n\n{exc}", self).exec()
+
+    def _on_tab_changed(self, tabs: list):
+        song = self._current_song
+        if not song or not song.get("stems_path"):
+            return
+        from core.project import read_manifest, update_manifest
+        try:
+            manifest = read_manifest(Path(song["stems_path"]))
+            manifest.tabs = list(tabs)
+            update_manifest(Path(song["stems_path"]), manifest)
+            song["tabs"] = manifest.tabs
+        except Exception as exc:
+            _ErrorDialog(f"Could not save tab:\n\n{exc}", self).exec()
 
     # ------------------------------------------------------------------
     # Export

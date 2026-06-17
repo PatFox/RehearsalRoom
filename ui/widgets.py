@@ -237,6 +237,41 @@ def gen_waveform(song_seed: int, stem_id: str, n: int = 320) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Shared timeline coordinate system
+# ---------------------------------------------------------------------------
+
+class TimelineCoords:
+    """Maps song-fraction [0,1] ↔ screen x for a zoom/scroll timeline.
+
+    Mixed into any widget that draws against the shared waveform timeline so
+    they stay pixel-aligned. Requires `self._zoom` and `self._scroll_frac`.
+    `_gutter` is a fixed left inset in px (e.g. 244 to align with the lane
+    heads / ruler); 0 means the whole width is the track (waveform lanes).
+    """
+    _gutter = 0
+
+    def _track_w(self) -> float:
+        return max(1.0, self.width() - self._gutter)
+
+    def _scroll_px(self) -> float:
+        return self._scroll_frac * self._track_w() * (self._zoom - 1)
+
+    def _total_w(self) -> float:
+        return self._track_w() * self._zoom
+
+    def _screen_x(self, frac: float) -> float:
+        """Song fraction → screen x coordinate."""
+        return self._gutter + frac * self._total_w() - self._scroll_px()
+
+    def _frac(self, screen_x: float) -> float:
+        """Screen x → song fraction (clamped to [0,1])."""
+        tw = self._total_w()
+        if tw <= 0:
+            return 0.0
+        return max(0.0, min(1.0, (screen_x - self._gutter + self._scroll_px()) / tw))
+
+
+# ---------------------------------------------------------------------------
 # Waveform canvas widget
 # ---------------------------------------------------------------------------
 
@@ -250,7 +285,7 @@ _BAR_W       = 2.0   # fixed screen px per bar (constant at all zoom levels)
 _BAR_GAP     = 0.8   # gap between bars
 
 
-class WaveformWidget(QWidget):
+class WaveformWidget(TimelineCoords, QWidget):
     seeked              = Signal(float)        # fraction 0-1
     loop_set            = Signal(float, float) # start_frac, end_frac
     loop_cleared        = Signal()            # user started a new drag — clear old loop
@@ -309,23 +344,8 @@ class WaveformWidget(QWidget):
         self._scroll_frac = max(0.0, min(1.0, scroll_frac))
         self.update()
 
-    # -------------------------------------------- coordinate helpers
-    def _scroll_px(self) -> float:
-        return self._scroll_frac * self.width() * (self._zoom - 1)
-
-    def _total_w(self) -> float:
-        return self.width() * self._zoom
-
-    def _screen_x(self, frac: float) -> float:
-        """Song fraction → screen x coordinate."""
-        return frac * self._total_w() - self._scroll_px()
-
-    def _frac(self, screen_x: float) -> float:
-        """Screen x → song fraction."""
-        tw = self._total_w()
-        if tw <= 0:
-            return 0.0
-        return max(0.0, min(1.0, (screen_x + self._scroll_px()) / tw))
+    # Coordinate helpers (_screen_x / _frac / …) come from TimelineCoords;
+    # _gutter defaults to 0 so the whole widget width is the track.
 
     # --------------------------------------------------------------- painting
     def paintEvent(self, event):

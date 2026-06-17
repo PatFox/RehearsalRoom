@@ -308,7 +308,7 @@ class StemLane(QFrame):
     loop_cleared        = Signal()
     label_changed       = Signal(str, str)        # stem_id, new_label
 
-    LANE_HEIGHT = 116
+    LANE_HEIGHT = 65
 
     def __init__(self, stem_id: str, label: str, color: str, wavedata: list,
                  theme: Theme, parent=None):
@@ -332,17 +332,16 @@ class StemLane(QFrame):
             f"QFrame {{ background: {self._theme.surface}; border-right: 1px solid {self._theme.border}; }}"
         )
         head_lay = QVBoxLayout(head)
-        head_lay.setContentsMargins(14, 11, 14, 11)
-        head_lay.setSpacing(8)
+        head_lay.setContentsMargins(14, 6, 14, 6)
+        head_lay.setSpacing(5)
 
         # top row: color bar + name + M/S buttons
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
         bar = QFrame()
         bar.setFixedWidth(4)
+        bar.setFixedHeight(25)
         bar.setStyleSheet(f"background: {color}; border-radius: 2px;")
-        name_col = QVBoxLayout()
-        name_col.setSpacing(2)
         self._name_lbl = InlineEditLabel(
             label,
             label_style="font-size: 14px; font-weight: 600; background: transparent; border: none;",
@@ -351,13 +350,8 @@ class StemLane(QFrame):
                 " border: none; border-bottom: 1px solid #2E6BFF; padding: 0px;"
             ),
         )
+        self._name_lbl.setFixedHeight(25)   # match the M/S buttons
         self._name_lbl.committed.connect(lambda v: self.label_changed.emit(self._id, v))
-        file_lbl = QLabel(f"{self._id}.flac")
-        file_lbl.setStyleSheet(f"font-family: 'Consolas', monospace; font-size: 10px; color: {self._theme.ink3};")
-        name_col.addWidget(self._name_lbl)
-        name_col.addWidget(file_lbl)
-        name_w = QWidget()
-        name_w.setLayout(name_col)
 
         self._mute_btn = MSSButton("M")
         self._solo_btn = MSSButton("S")
@@ -365,7 +359,7 @@ class StemLane(QFrame):
         self._solo_btn.clicked.connect(lambda: self.solo_toggled.emit(self._id, self._solo_btn.isChecked()))
 
         top_row.addWidget(bar)
-        top_row.addWidget(name_w, 1)
+        top_row.addWidget(self._name_lbl, 1)
         top_row.addWidget(self._mute_btn)
         top_row.addWidget(self._solo_btn)
         head_lay.addLayout(top_row)
@@ -1011,6 +1005,7 @@ class PlayerPanel(QWidget):
     back_clicked  = Signal()
     export_clicked = Signal(dict, str)   # song, mode ("all" | "current" | "original")
     reseparate_clicked = Signal(dict)    # song
+    tab_changed        = Signal(list)    # list[TabTrack] — persist
     save_metadata  = Signal(dict)
     loop_save_requested = Signal(object)   # SavedLoop — MainWindow writes to disk
     loop_delete_requested = Signal(str)    # loop name
@@ -1119,6 +1114,14 @@ class PlayerPanel(QWidget):
             chips_row.addWidget(w)
         top_lay.addLayout(chips_row)
 
+        self._tab_btn = QPushButton("Tab")
+        self._tab_btn.setProperty("role", "ghost")
+        self._tab_btn.setFixedHeight(34)
+        self._tab_btn.setCheckable(True)
+        self._tab_btn.setToolTip("Show/hide the tablature editor")
+        self._tab_btn.toggled.connect(self._on_toggle_tab)
+        top_lay.addWidget(self._tab_btn)
+
         self._resep_btn = QPushButton("Re-separate")
         self._resep_btn.setProperty("role", "ghost")
         self._resep_btn.setFixedHeight(34)
@@ -1165,6 +1168,14 @@ class PlayerPanel(QWidget):
         self._waveform_scrollbar = WaveformScrollBar(self._theme)
         self._waveform_scrollbar.scrolled.connect(self._on_scrollbar_scrolled)
         timeline_lay.addWidget(self._waveform_scrollbar)
+
+        # tab editor — docked below the lanes, shares the timeline zoom/scroll
+        from ui.tab_editor import TabEditorPanel
+        self._tab_editor = TabEditorPanel(self._theme)
+        self._tab_editor.changed.connect(self._on_tab_changed)
+        self._tab_editor.seek_requested.connect(lambda p: self._seek(p, user_initiated=True))
+        self._tab_editor.zoom_scroll_changed.connect(self._on_zoom_scroll)
+        timeline_lay.addWidget(self._tab_editor)
 
         timeline_outer.addWidget(lanes_area, 1)
 
@@ -1313,6 +1324,11 @@ class PlayerPanel(QWidget):
         loops = song.get("loops", [])
         self._loop_list.set_loops(loops)
 
+        # Tab editor: feed duration, available lanes (excl. original) and saved tabs
+        self._tab_editor.set_duration(self._duration)
+        self._tab_editor.set_lane_ids([s for s in STEM_IDS])
+        self._tab_editor.set_tabs(list(song.get("tabs", [])))
+
         # Use real waveform data from player if available, else procedural fallback
         waveforms = {}
         if player is not None:
@@ -1440,6 +1456,7 @@ class PlayerPanel(QWidget):
     def _update_progress(self, p: float):
         for lane in self._lanes.values():
             lane.set_progress(p)
+        self._tab_editor.set_progress(p)
 
     # ------------------------------------------------------------------
     # Loop state machine
@@ -1528,6 +1545,13 @@ class PlayerPanel(QWidget):
             lane.set_zoom_scroll(self._zoom, self._scroll_frac)
         self._waveform_scrollbar.set_zoom_scroll(self._zoom, self._scroll_frac)
         self._ruler.set_zoom_scroll(self._zoom, self._scroll_frac)
+        self._tab_editor.set_zoom_scroll(self._zoom, self._scroll_frac)
+
+    def _on_toggle_tab(self, on: bool):
+        self._tab_editor.setVisible(on)
+
+    def _on_tab_changed(self):
+        self.tab_changed.emit(self._tab_editor.tabs())
 
     def _center_playhead(self):
         """Scroll so the playhead sits in the middle of the visible window."""

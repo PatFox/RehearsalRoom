@@ -137,16 +137,20 @@ class StemsManifest:
     original: str = ""   # filename of the embedded original mix, "" if none
     stems: list[StemInfo] = field(default_factory=list)
     loops: list[SavedLoop] = field(default_factory=list)
+    tabs: list = field(default_factory=list)   # list[core.tab.TabTrack]
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["loops"] = [lp.to_dict() for lp in self.loops]
+        d["tabs"] = [t.to_dict() for t in self.tabs]
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "StemsManifest":
+        from core.tab import TabTrack
         stems = [StemInfo(**s) for s in d.get("stems", [])]
         loops = [SavedLoop.from_dict(lp) for lp in d.get("loops", [])]
+        tabs = [TabTrack.from_dict(t) for t in d.get("tabs", [])]
         return cls(
             version=d.get("version", MANIFEST_VERSION),
             title=d.get("title", ""),
@@ -156,6 +160,7 @@ class StemsManifest:
             original=d.get("original", ""),
             stems=stems,
             loops=loops,
+            tabs=tabs,
         )
 
 
