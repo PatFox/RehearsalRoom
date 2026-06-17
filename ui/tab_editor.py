@@ -350,7 +350,8 @@ class TabTimeline(TimelineCoords, QWidget):
         if ctrl and key == Qt.Key.Key_X:
             self.cut_selection(); return
         if ctrl and key == Qt.Key.Key_V:
-            self.paste(insert=shift); return
+            # Ctrl+V adds bars (insert); Ctrl+Shift+V overwrites keeping anchors.
+            self.paste(insert=not shift); return
         if ctrl and key == Qt.Key.Key_A:
             self.select_all(); return
         if key == Qt.Key.Key_Escape:
@@ -556,7 +557,9 @@ class TabTimeline(TimelineCoords, QWidget):
         self.changed.emit()
         self.update()
 
-    def paste(self, insert: bool = False):
+    def paste(self, insert: bool = True):
+        """insert=True (default): add the copied bars after the caret, shifting
+        later bars. insert=False: overwrite consecutive bars keeping anchors."""
         if not _BAR_CLIPBOARD or not self._track or self._caret[0] < 0:
             return
         if insert:
@@ -685,10 +688,10 @@ class TabEditorPanel(QFrame):
         for label, tip, fn in [
             ("Copy", "Copy selected bar(s)  (Ctrl+C)", lambda: self._timeline.copy_selection()),
             ("Cut", "Cut selected bar(s)  (Ctrl+X)", lambda: self._timeline.cut_selection()),
-            ("Paste", "Paste into bars from caret, keeping anchors  (Ctrl+V)",
-             lambda: self._timeline.paste(insert=False)),
-            ("Paste insert", "Insert pasted bars, shifting later bars  (Ctrl+Shift+V)",
+            ("Paste", "Add copied bar(s) after the current bar  (Ctrl+V)",
              lambda: self._timeline.paste(insert=True)),
+            ("Paste into", "Overwrite bars from the caret, keeping their anchors  (Ctrl+Shift+V)",
+             lambda: self._timeline.paste(insert=False)),
         ]:
             b = QPushButton(label); b.setToolTip(tip); b.clicked.connect(fn)
             bar.addWidget(b)

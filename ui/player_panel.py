@@ -1034,8 +1034,12 @@ class PlayerPanel(QWidget):
         self._player = None  # set externally after construction
 
         self._tick_timer = QTimer(self)
-        self._tick_timer.setInterval(40)
+        self._tick_timer.setInterval(16)        # ~60 fps for smooth scrolling
         self._tick_timer.timeout.connect(self._on_tick)
+        # Smoothed display position: eases toward the real audio position so the
+        # playhead + auto-scroll glide instead of stepping with the ~23 ms audio
+        # callback / frame quantisation. Visual only — loop logic uses _time_ms.
+        self._disp_ms = 0.0
 
         self._setup_ui()
 
@@ -1405,6 +1409,7 @@ class PlayerPanel(QWidget):
         self._transport.set_playing(self._playing)
         if self._playing:
             self._auto_center = True   # re-enable centering when playback starts
+            self._disp_ms = self._time_ms   # start the smoothed clock in sync
             self._tick_timer.start()
         else:
             self._tick_timer.stop()
@@ -1414,6 +1419,7 @@ class PlayerPanel(QWidget):
             self._player.stop()
         self._playing = False
         self._time_ms = 0.0
+        self._disp_ms = 0.0
         self._transport.set_playing(False)
         self._transport.set_time(0)
         self._tick_timer.stop()
@@ -1421,6 +1427,7 @@ class PlayerPanel(QWidget):
 
     def _seek(self, progress: float, user_initiated: bool = False):
         self._time_ms = progress * self._duration
+        self._disp_ms = self._time_ms     # snap the smoothed clock, no glide
         if user_initiated:
             self._auto_center = False
         if self._player:
@@ -1432,9 +1439,9 @@ class PlayerPanel(QWidget):
         if self._player:
             self._time_ms = self._player.position_ms()
         else:
-            self._time_ms += 40
+            self._time_ms += 16
 
-        # Loop-back when active
+        # Loop-back when active (use the real position, not the smoothed one)
         if self._loop_state == 2 and self._loop_end_ms > 0:
             if self._time_ms >= self._loop_end_ms:
                 self._seek(self._loop_start_ms / self._duration)
@@ -1446,8 +1453,15 @@ class PlayerPanel(QWidget):
             self._transport.set_playing(False)
             self._tick_timer.stop()
 
-        self._transport.set_time(int(self._time_ms))
-        self._update_progress(self._time_ms / self._duration)
+        # Ease the display clock toward the real position. Snap if we're far off
+        # (a big jump from a seek/loop) so it doesn't visibly glide across.
+        if abs(self._time_ms - self._disp_ms) > 400:
+            self._disp_ms = self._time_ms
+        else:
+            self._disp_ms += (self._time_ms - self._disp_ms) * 0.25
+
+        self._transport.set_time(int(self._disp_ms))
+        self._update_progress(self._disp_ms / self._duration)
         if self._loop_state == 1:
             self._update_loop_display()
         if self._auto_center:
@@ -1557,10 +1571,12 @@ class PlayerPanel(QWidget):
         """Scroll so the playhead sits in the middle of the visible window."""
         if self._zoom <= 1.0 or self._duration <= 0:
             return
-        progress = self._time_ms / self._duration
+        progress = self._disp_ms / self._duration
         vis = 1.0 / self._zoom          # visible fraction of total
-        ideal = (progress - vis / 2) / max(1e-9, 1.0 - vis)
-        self._scroll_frac = max(0.0, min(1.0, ideal))
+        ideal = max(0.0, min(1.0, (progress - vis / 2) / max(1e-9, 1.0 - vis)))
+        if abs(ideal - self._scroll_frac) < 1e-4:
+            return                      # already there — skip a redundant repaint
+        self._scroll_frac = ideal
         self._apply_zoom_scroll()
 
     # ------------------------------------------------------------------
