@@ -294,9 +294,12 @@ class StemPlayer:
         if not self._stems:
             raise RuntimeError("No audio loaded.")
 
-        any_solo = any(self._solos.values())
+        # The 'current mix' is the separated stems only — never the embedded
+        # original, regardless of its mute/solo state in the UI.
+        stems = {sid: d for sid, d in self._stems.items() if sid != "original"}
+        any_solo = any(self._solos.get(sid) for sid in stems)
         mix = np.zeros((self._max_src, 2), dtype=np.float32)
-        for sid, data in self._stems.items():
+        for sid, data in stems.items():
             if any_solo and not self._solos.get(sid):
                 continue
             if not any_solo and self._mutes.get(sid, False):
