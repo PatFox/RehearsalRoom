@@ -24,6 +24,7 @@ ROW_GAP  = 18         # px between string lines
 TOP_PAD  = 24         # room for time-signature labels
 BOT_PAD  = 18
 _HANDLE_HIT = 6       # px hit radius for a bar-end resize handle
+_SEL_HANDLE_W = 14    # px width of the clickable bar-select handle (top of barline)
 _SUBDIV = 4           # editing-grid columns per beat (16th-note grid in 4/4)
 
 # In-app bar clipboard: cloned Bar objects (content + original length; ms
@@ -51,7 +52,8 @@ class TabTimeline(TimelineCoords, QWidget):
         self._progress = 0.0
         # caret = (bar_index, column, row)  row 0 = top string line
         self._caret = (-1, 0, 0)
-        self._sel_anchor = None        # bar index where a range selection began
+        self._sel_bars: set[int] = set()   # selected bar indices (via start handles)
+        self._sel_pivot = -1               # last handle clicked (for Shift range)
         self._fret_session = False     # True while consecutive digits build one fret
         self._drag_bar = -1            # bar whose end-handle is being dragged
         self.setMouseTracking(True)
@@ -62,7 +64,33 @@ class TabTimeline(TimelineCoords, QWidget):
     def set_track(self, track: TabTrack | None):
         self._track = track
         self._caret = (-1, 0, 0)
+        self._sel_bars = set()
+        self._sel_pivot = -1
+        if track is not None and self._sanitize(track):
+            self.changed.emit()        # persist the repair
         self._apply_height()
+        self.update()
+
+    def _sanitize(self, track: TabTrack) -> bool:
+        """Repair bar anchors that fall outside the song timeline (e.g. from an
+        earlier bug that let bars pile up past the end). Preserves note content
+        and relative timing by proportionally fitting the tab into [0, duration].
+        Returns True if anything changed."""
+        if self._duration <= 1 or not track.bars:
+            return False
+        lo = min(b.start_ms for b in track.bars)
+        hi = max(b.end_ms for b in track.bars)
+        if lo >= 0 and hi <= self._duration:
+            return False               # already within the song — leave it alone
+        span = (hi - lo) or 1
+        scale = self._duration / span
+        for b in track.bars:
+            b.start_ms = int(round((b.start_ms - lo) * scale))
+            b.end_ms = max(b.start_ms + 1, int(round((b.end_ms - lo) * scale)))
+        return True
+
+    def set_duration(self, ms: int):
+        self._duration = max(1, int(ms))
         self.update()
 
     def set_duration(self, ms: int):
@@ -152,19 +180,19 @@ class TabTimeline(TimelineCoords, QWidget):
         accent = QColor(t.accent)
         ms_now = self._progress * self._duration
         act_bar, act_beat = active_bar_beat(self._track, ms_now)
-        sel = self._selection() if self._sel_anchor is not None else None
 
         for bi, bar in enumerate(self._track.bars):
             x0 = self._x_for_ms(bar.start_ms)
             x1 = self._x_for_ms(bar.end_ms)
+            selected = bi in self._sel_bars
 
             # active-bar wash
             if bi == act_bar:
                 wash = QColor(accent); wash.setAlpha(20)
                 p.fillRect(QRectF(x0, 0, x1 - x0, h), wash)
 
-            # selection wash (explicit range)
-            if sel and sel[0] <= bi <= sel[1]:
+            # selection wash
+            if selected:
                 selc = QColor(accent); selc.setAlpha(34)
                 p.fillRect(QRectF(x0, 0, x1 - x0, h), selc)
 
@@ -185,15 +213,29 @@ class TabTimeline(TimelineCoords, QWidget):
                 p.setPen(QPen(gc, 1))
                 p.drawLine(QPointF(gx, gy0), QPointF(gx, gy1))
 
-            # barline + time signature
+            # barline
             p.setPen(QPen(QColor(t.ink3), 1))
             p.drawLine(QPointF(x0, TOP_PAD - 6), QPointF(x0, self._row_y(nstr - 1) + 6))
-            p.setFont(QFont("Consolas", 8))
-            p.setPen(QColor(t.ink2))
-            # show time sig only when it changes from the previous bar
+
+            # clickable bar-select handle at the top of the start line
+            hcol = QColor(accent) if selected else QColor(t.ink3)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(hcol)
+            p.drawRoundedRect(QRectF(x0, 2, _SEL_HANDLE_W, TOP_PAD - 8), 2, 2)
+            # two grip lines so it reads as a handle
+            grip = QColor(t.surface); grip.setAlpha(200)
+            p.setPen(QPen(grip, 1))
+            gx = x0 + _SEL_HANDLE_W / 2
+            p.drawLine(QPointF(gx - 2, 6), QPointF(gx - 2, TOP_PAD - 8))
+            p.drawLine(QPointF(gx + 2, 6), QPointF(gx + 2, TOP_PAD - 8))
+
+            # time signature (only when it changes), to the right of the handle
             prev = self._track.bars[bi - 1] if bi > 0 else None
             if prev is None or (prev.ts_num, prev.ts_den) != (bar.ts_num, bar.ts_den):
-                p.drawText(QPointF(x0 + 3, TOP_PAD - 9), f"{bar.ts_num}/{bar.ts_den}")
+                p.setFont(QFont("Consolas", 8))
+                p.setPen(QColor(t.ink2))
+                p.drawText(QPointF(x0 + _SEL_HANDLE_W + 3, TOP_PAD - 9),
+                           f"{bar.ts_num}/{bar.ts_den}")
 
             # notes
             for beat in bar.beats:
@@ -258,17 +300,44 @@ class TabTimeline(TimelineCoords, QWidget):
                 return bi
         return -1
 
+    def _sel_handle_at(self, x: float, y: float) -> int:
+        if not self._track or y > TOP_PAD:
+            return -1
+        for bi, bar in enumerate(self._track.bars):
+            hx = self._x_for_ms(bar.start_ms)
+            if hx - 2 <= x <= hx + _SEL_HANDLE_W + 2:
+                return bi
+        return -1
+
     def mousePressEvent(self, e):
         self.setFocus()
-        x = e.position().x()
+        x, y = e.position().x(), e.position().y()
         if x < GUTTER_W or not self._track:
             return
-        # bar-end drag-resize takes priority
+        mods = e.modifiers()
+
+        # bar-select handle (top of the start line)
+        bi = self._sel_handle_at(x, y)
+        if bi >= 0:
+            if mods & Qt.KeyboardModifier.ControlModifier:
+                self._sel_bars ^= {bi}                      # toggle
+            elif mods & Qt.KeyboardModifier.ShiftModifier and self._sel_pivot >= 0:
+                lo, hi = sorted((self._sel_pivot, bi))
+                self._sel_bars = set(range(lo, hi + 1))     # range from pivot
+            else:
+                self._sel_bars = {bi}                       # select just this
+            self._sel_pivot = bi
+            self._caret = (bi, 0, self._caret[2])           # follow for note entry
+            self.update()
+            return
+
+        # bar-end drag-resize
         bi = self._end_handle_at(x)
         if bi >= 0:
             self._drag_bar = bi
             return
-        # otherwise place the caret
+
+        # otherwise place the caret (clears any bar selection)
         bi = self._bar_at_x(x)
         if bi < 0:
             return
@@ -277,11 +346,7 @@ class TabTimeline(TimelineCoords, QWidget):
         frac_in_bar = (self._frac(x) * self._duration - bar.start_ms) / max(1, bar.length_ms)
         col = max(0, min(ncols - 1, round(frac_in_bar * ncols)))
         row = max(0, min(self._strings() - 1, round((e.position().y() - TOP_PAD) / ROW_GAP)))
-        if e.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-            if self._sel_anchor is None:
-                self._sel_anchor = self._caret[0] if self._caret[0] >= 0 else bi
-        else:
-            self._sel_anchor = None
+        self._sel_bars = set()
         self._caret = (bi, col, row)
         self._fret_session = False
         self.update()
@@ -294,9 +359,13 @@ class TabTimeline(TimelineCoords, QWidget):
             self._set_bar_end(self._drag_bar, ms)
             self.update()
             return
-        # cursor hint over a resize handle
-        self.setCursor(Qt.CursorShape.SizeHorCursor if self._end_handle_at(x) >= 0
-                       else Qt.CursorShape.ArrowCursor)
+        # cursor hint: pointing hand over a select handle, resize over a bar end
+        if self._sel_handle_at(x, e.position().y()) >= 0:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        elif self._end_handle_at(x) >= 0:
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+        else:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def mouseReleaseEvent(self, e):
         if self._drag_bar >= 0:
@@ -328,6 +397,8 @@ class TabTimeline(TimelineCoords, QWidget):
 
     def _set_bar_end(self, bi: int, ms: int):
         bars = self._track.bars
+        if self._duration > 1:
+            ms = min(ms, self._duration)          # never anchor past the song end
         bars[bi].end_ms = ms
         if bi + 1 < len(bars):
             bars[bi + 1].start_ms = ms
@@ -355,12 +426,10 @@ class TabTimeline(TimelineCoords, QWidget):
         if ctrl and key == Qt.Key.Key_A:
             self.select_all(); return
         if key == Qt.Key.Key_Escape:
-            self._sel_anchor = None; self.update(); return
-        if shift and key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
-            self._extend_selection(-1 if key == Qt.Key.Key_Left else 1); return
+            self._sel_bars = set(); self.update(); return
 
         if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
-            self._sel_anchor = None
+            self._sel_bars = set()
             self._move_col(-1 if key == Qt.Key.Key_Left else 1)
         elif key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
             d = -1 if key == Qt.Key.Key_Up else 1
@@ -370,7 +439,10 @@ class TabTimeline(TimelineCoords, QWidget):
         elif Qt.Key.Key_0 <= key <= Qt.Key.Key_9:
             self._type_digit(key - Qt.Key.Key_0)
         elif key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            self._clear_caret_note()
+            if self._sel_bars:
+                self.delete_selection()      # bars selected → delete them
+            else:
+                self._clear_caret_note()      # otherwise clear the note at the caret
         else:
             tech = {Qt.Key.Key_H: "h", Qt.Key.Key_P: "p", Qt.Key.Key_B: "b",
                     Qt.Key.Key_Slash: "/", Qt.Key.Key_Backslash: "\\",
@@ -468,18 +540,46 @@ class TabTimeline(TimelineCoords, QWidget):
 
     def add_bar(self, default_len_ms: int):
         bars = self._track.bars
+        dur = self._duration if self._duration > 1 else None
         if bars:
             prev = bars[-1]
-            start = prev.end_ms
             length = prev.length_ms or default_len_ms
-            bar = Bar(ts_num=prev.ts_num, ts_den=prev.ts_den,
-                      start_ms=start, end_ms=start + length)
+            start = prev.end_ms
+            if dur:
+                if start >= dur:                       # no room left in the song
+                    length = min(length, dur)
+                    start = max(0, dur - length)
+                end = min(start + length, dur)
+            else:
+                end = start + length
+            bar = Bar(ts_num=prev.ts_num, ts_den=prev.ts_den, start_ms=start, end_ms=end)
         else:
-            bar = Bar(ts_num=4, ts_den=4, start_ms=0, end_ms=default_len_ms)
+            end = min(default_len_ms, dur) if dur else default_len_ms
+            bar = Bar(ts_num=4, ts_den=4, start_ms=0, end_ms=end)
         bars.append(bar)
         self._caret = (len(bars) - 1, 0, self._caret[2])
         self.changed.emit()
+        self._reveal_bar(len(bars) - 1)
         self.update()
+
+    def _reveal_bar(self, idx: int):
+        """Zoom/scroll the shared timeline so bar *idx* is comfortably visible.
+        A 3 s bar in a long song is a sliver at zoom 1, so framing it is what
+        makes 'Add bar' actually show something."""
+        from ui.widgets import _ZOOM_MAX
+        bars = self._track.bars
+        if not (0 <= idx < len(bars)) or self._duration <= 0:
+            return
+        bar = bars[idx]
+        span = max(bar.length_ms * 4, 1)            # show ~4 bars' worth of context
+        zoom = max(1.0, min(_ZOOM_MAX, self._duration / span))
+        if zoom <= 1.0:
+            self.zoom_scroll_changed.emit(1.0, 0.0)
+            return
+        center = ((bar.start_ms + bar.end_ms) / 2) / self._duration
+        vis = 1.0 / zoom
+        scroll = (center - vis / 2) / max(1e-9, 1.0 - vis)
+        self.zoom_scroll_changed.emit(zoom, max(0.0, min(1.0, scroll)))
 
     def set_caret_bar_end(self, ms: int):
         bi = self._caret[0]
@@ -503,29 +603,16 @@ class TabTimeline(TimelineCoords, QWidget):
             self.update()
 
     # ------------------------------------------------------------- selection + clipboard
-    def _selection(self):
-        """(lo, hi) inclusive bar range, or None. Caret bar when no anchor."""
-        cbar = self._caret[0]
-        if cbar < 0:
-            return None
-        if self._sel_anchor is None:
-            return (cbar, cbar)
-        return (min(self._sel_anchor, cbar), max(self._sel_anchor, cbar))
+    def _selected_bars(self) -> list[int]:
+        """Sorted selected bar indices; falls back to the caret bar if none."""
+        if self._sel_bars:
+            return sorted(self._sel_bars)
+        return [self._caret[0]] if self._caret[0] >= 0 else []
 
     def select_all(self):
         if not self._track or not self._track.bars:
             return
-        self._sel_anchor = 0
-        self._caret = (len(self._track.bars) - 1, 0, self._caret[2])
-        self.update()
-
-    def _extend_selection(self, d: int):
-        if not self._track:
-            return
-        if self._sel_anchor is None:
-            self._sel_anchor = self._caret[0]
-        nb = max(0, min(len(self._track.bars) - 1, self._caret[0] + d))
-        self._caret = (nb, 0, self._caret[2])
+        self._sel_bars = set(range(len(self._track.bars)))
         self.update()
 
     def _clone_beats(self, beats, max_strings):
@@ -539,21 +626,37 @@ class TabTimeline(TimelineCoords, QWidget):
         return out
 
     def copy_selection(self):
-        sel = self._selection()
-        if not sel or not self._track:
+        if not self._track:
             return
-        lo, hi = sel
-        _BAR_CLIPBOARD[:] = [Bar.from_dict(b.to_dict()) for b in self._track.bars[lo:hi + 1]]
+        idx = self._selected_bars()
+        if not idx:
+            return
+        _BAR_CLIPBOARD[:] = [Bar.from_dict(self._track.bars[i].to_dict()) for i in idx]
 
     def cut_selection(self):
-        sel = self._selection()
-        if not sel or not self._track:
+        if not self._track:
+            return
+        idx = self._selected_bars()
+        if not idx:
             return
         self.copy_selection()
-        lo, hi = sel
-        del self._track.bars[lo:hi + 1]
-        self._sel_anchor = None
-        self._caret = (min(lo, len(self._track.bars) - 1), 0, self._caret[2])
+        self._delete_bars(idx)
+
+    def delete_selection(self):
+        """Remove the selected bars (no clipboard). Anchors of remaining bars
+        are left untouched — they stay aligned to the recording."""
+        if not self._track:
+            return
+        idx = self._selected_bars()
+        if idx:
+            self._delete_bars(idx)
+
+    def _delete_bars(self, idx: list[int]):
+        for i in sorted(idx, reverse=True):     # delete high→low to keep indices valid
+            del self._track.bars[i]
+        self._sel_bars = set()
+        first = idx[0] if idx else 0
+        self._caret = (min(first, len(self._track.bars) - 1), 0, self._caret[2])
         self.changed.emit()
         self.update()
 
@@ -571,7 +674,8 @@ class TabTimeline(TimelineCoords, QWidget):
         """Overwrite consecutive bars from the caret, keeping their anchors.
         Appends new bars (default length) only if the clipboard runs past the end."""
         bars = self._track.bars
-        start = self._caret[0]
+        sel = self._selected_bars()
+        start = sel[0] if sel else self._caret[0]
         nstr = self._strings()
         for i, cb in enumerate(_BAR_CLIPBOARD):
             tgt = start + i
@@ -594,7 +698,8 @@ class TabTimeline(TimelineCoords, QWidget):
         every later bar's anchors by the inserted total length."""
         bars = self._track.bars
         nstr = self._strings()
-        idx = self._caret[0] + 1            # insert after the caret bar
+        sel = self._selected_bars()
+        idx = (sel[-1] if sel else self._caret[0]) + 1   # insert after last selected/caret bar
         boundary = bars[idx].start_ms if idx < len(bars) else bars[-1].end_ms
         lengths = [(cb.length_ms or 2000) for cb in _BAR_CLIPBOARD]
         total = sum(lengths)
@@ -692,8 +797,11 @@ class TabEditorPanel(QFrame):
              lambda: self._timeline.paste(insert=True)),
             ("Paste into", "Overwrite bars from the caret, keeping their anchors  (Ctrl+Shift+V)",
              lambda: self._timeline.paste(insert=False)),
+            ("Delete bars", "Delete the selected bar(s)  (Del)",
+             lambda: self._timeline.delete_selection()),
         ]:
-            b = QPushButton(label); b.setToolTip(tip); b.clicked.connect(fn)
+            b = QPushButton(label); b.setToolTip(tip)
+            b.clicked.connect(lambda _=False, fn=fn: fn())   # absorb clicked(bool)
             bar.addWidget(b)
 
         bar.addStretch(1)
@@ -708,7 +816,8 @@ class TabEditorPanel(QFrame):
             b.setFixedHeight(24)
             b.clicked.connect(lambda _=False, tk=tech: self._palette_tech(tk))
             pal.addWidget(b)
-        hint = QLabel("Click a cell, type fret digits; ↑↓ string, ←→ beat, Del clears.")
+        hint = QLabel("Click a cell, type fret digits; ↑↓ string, ←→ beat, Del clears.  "
+                      "Click a bar's top handle to select it (Ctrl/Shift for multiple).")
         hint.setStyleSheet(f"color: {self._theme.ink3}; font-size: 11px;")
         pal.addSpacing(10); pal.addWidget(hint)
         pal.addStretch(1)
@@ -766,7 +875,7 @@ class TabEditorPanel(QFrame):
                 self._lane_combo.setCurrentText(track.stem_id)
                 self._lane_combo.blockSignals(False)
 
-    def _add_track(self):
+    def _add_track(self, *_):
         # Default 6-string guitar; name auto-incremented.
         n = len(self._tracks) + 1
         stem = self._lane_combo.currentText() or ""
@@ -805,15 +914,16 @@ class TabEditorPanel(QFrame):
         if track and track.bars:
             self._timeline.set_time_signature(self._ts_num.value(), int(self._ts_den.currentText()))
 
-    def _add_bar(self):
+    def _add_bar(self, *_):
         track = self._cur_track()
         if not track:
             self._add_track()
             track = self._cur_track()
-        default_len = min(2000, self._duration) or 2000
+        # First/empty bar defaults to 3 s; later bars inherit the previous length.
+        default_len = min(3000, self._duration) or 3000
         self._timeline.add_bar(default_len)
 
-    def _set_bar_end_playhead(self):
+    def _set_bar_end_playhead(self, *_):
         track = self._cur_track()
         if track and track.bars:
             self._timeline.set_caret_bar_end(int(self._timeline._progress * self._duration))
