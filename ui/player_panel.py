@@ -434,12 +434,14 @@ class TransportBar(QFrame):
     save_loop      = Signal()   # emitted when user clicks the save-loop button
     master_changed = Signal(int)
     tempo_changed  = Signal(float)
+    pitch_changed  = Signal(int)    # semitones
 
     def __init__(self, duration_ms: int, theme: Theme, parent=None):
         super().__init__(parent)
         self._theme = theme
         self._duration = duration_ms
         self._current_speed = 1.0
+        self._current_pitch = 0
         self.setFixedHeight(88)
         self.setStyleSheet(
             f"QFrame {{ background: {theme.surface}; border-top: 1px solid {theme.border}; }}"
@@ -559,6 +561,45 @@ class TransportBar(QFrame):
         speed_group.addLayout(speed_row)
         lay.addLayout(speed_group)
 
+        # --- Pitch buttons (semitones, independent of speed) ---
+        pitch_group = QVBoxLayout()
+        pitch_group.setSpacing(3)
+        pitch_lbl = QLabel("PITCH")
+        pitch_lbl.setStyleSheet(
+            f"font-size: 10px; font-weight: 600; letter-spacing: 0.1em; color: {self._theme.ink3};"
+        )
+        pitch_row = QHBoxLayout()
+        pitch_row.setSpacing(4)
+
+        self._pitch_down_btn = QPushButton("−")
+        self._pitch_down_btn.setFixedSize(28, 28)
+        self._pitch_down_btn.setToolTip("Down a semitone (min −12)")
+        self._pitch_down_btn.setStyleSheet(btn_style)
+        self._pitch_down_btn.clicked.connect(self._pitch_down)
+
+        self._pitch_val_lbl = QLabel("0")
+        self._pitch_val_lbl.setStyleSheet(
+            "font-family: 'Consolas', monospace; font-size: 13px; font-weight: 600;"
+        )
+        self._pitch_val_lbl.setFixedWidth(38)
+        self._pitch_val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._pitch_val_lbl.setToolTip("Double-click to reset to 0")
+        self._pitch_val_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pitch_val_lbl.mouseDoubleClickEvent = lambda e: self._set_pitch(0)
+
+        self._pitch_up_btn = QPushButton("+")
+        self._pitch_up_btn.setFixedSize(28, 28)
+        self._pitch_up_btn.setToolTip("Up a semitone (max +12)")
+        self._pitch_up_btn.setStyleSheet(btn_style)
+        self._pitch_up_btn.clicked.connect(self._pitch_up)
+
+        pitch_row.addWidget(self._pitch_down_btn)
+        pitch_row.addWidget(self._pitch_val_lbl)
+        pitch_row.addWidget(self._pitch_up_btn)
+        pitch_group.addWidget(pitch_lbl)
+        pitch_group.addLayout(pitch_row)
+        lay.addLayout(pitch_group)
+
         lay.addStretch()
 
         # master fader
@@ -628,6 +669,30 @@ class TransportBar(QFrame):
         self._speed_down_btn.setEnabled(rate > 0.5)
         self._speed_up_btn.setEnabled(rate < 1.0)
         self.tempo_changed.emit(rate)
+
+    def _pitch_down(self):
+        self._set_pitch(self._current_pitch - 1)
+
+    def _pitch_up(self):
+        self._set_pitch(self._current_pitch + 1)
+
+    def _set_pitch(self, semitones: int):
+        semitones = max(-12, min(12, int(semitones)))
+        self._current_pitch = semitones
+        self._pitch_val_lbl.setText(
+            f"+{semitones}" if semitones > 0 else str(semitones))
+        self._pitch_down_btn.setEnabled(semitones > -12)
+        self._pitch_up_btn.setEnabled(semitones < 12)
+        self.pitch_changed.emit(semitones)
+
+    def set_pitch_display(self, semitones: int):
+        """Update the pitch display without re-emitting (e.g. on song load)."""
+        semitones = max(-12, min(12, int(semitones)))
+        self._current_pitch = semitones
+        self._pitch_val_lbl.setText(
+            f"+{semitones}" if semitones > 0 else str(semitones))
+        self._pitch_down_btn.setEnabled(semitones > -12)
+        self._pitch_up_btn.setEnabled(semitones < 12)
 
     def _tick_spinner(self):
         self._spinner_idx = (self._spinner_idx + 1) % len(self._spinner_frames)
@@ -1120,6 +1185,7 @@ class PlayerPanel(QWidget):
         self._transport.save_loop.connect(self._on_save_loop)
         self._transport.master_changed.connect(self._on_master_changed)
         self._transport.tempo_changed.connect(self._on_tempo_changed)
+        self._transport.pitch_changed.connect(self._on_pitch_changed)
         root.addWidget(self._transport)
 
     # ------------------------------------------------------------------
@@ -1214,6 +1280,8 @@ class PlayerPanel(QWidget):
         self._loop_start_ms = -1.0
         self._loop_end_ms   = -1.0
         self._transport.set_loop_state(0)
+        self._pitch_semitones = 0
+        self._transport.set_pitch_display(0)
 
         self._title_lbl.setText(song.get("title", ""))
         self._artist_lbl.setText(song.get("artist", ""))
@@ -1509,6 +1577,11 @@ class PlayerPanel(QWidget):
         self._tempo_rate = rate
         if self._player:
             self._player.set_tempo(rate)
+
+    def _on_pitch_changed(self, semitones: int):
+        self._pitch_semitones = semitones
+        if self._player:
+            self._player.set_pitch(semitones)
 
     # ------------------------------------------------------------------
     # Metadata dialog

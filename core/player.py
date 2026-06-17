@@ -50,20 +50,28 @@ def _ffmpeg_exe() -> str:
         raise FileNotFoundError("ffmpeg not found. Run: pip install imageio-ffmpeg")
 
 
-def _rubberband_chunk(data: np.ndarray, sr: int, rate: float) -> np.ndarray:
-    """Stretch *data* ([samples, channels]) by *rate* using ffmpeg rubberband filter."""
+def _semitones_to_ratio(semitones: float) -> float:
+    return 2.0 ** (semitones / 12.0)
+
+
+def _rubberband_chunk(data: np.ndarray, sr: int, rate: float,
+                      pitch: float = 0.0) -> np.ndarray:
+    """Time-stretch by *rate* and pitch-shift by *pitch* semitones (independent)
+    using ffmpeg's rubberband filter. *data* is [samples, channels]."""
     buf = io.BytesIO()
     sf.write(buf, data, sr, format="WAV")
+    af = f"rubberband=tempo={rate:.6f}:pitch={_semitones_to_ratio(pitch):.6f}"
     _no_window = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
     proc = subprocess.run(
         [_ffmpeg_exe(), "-y",
          "-f", "wav", "-i", "pipe:0",
-         "-af", f"rubberband=tempo={rate:.6f}",
+         "-af", af,
          "-f", "wav", "pipe:1"],
         input=buf.getvalue(), capture_output=True, **_no_window,
     )
     if proc.returncode != 0 or not proc.stdout:
-        # Fallback: simple resampling (changes pitch — shouldn't normally happen)
+        # Fallback: simple resampling for tempo only (pitch shift unavailable
+        # without rubberband — shouldn't normally happen).
         n_out = int(len(data) / rate)
         idx   = np.linspace(0, len(data) - 1, n_out)
         i0    = np.clip(idx.astype(np.int32), 0, len(data) - 2)
@@ -80,13 +88,15 @@ def _stretch_chunk(
     sr: int,
     rate: float,
     context_len: int,
+    pitch: float = 0.0,
 ) -> dict[str, np.ndarray]:
-    """Stretch one chunk for all stems in parallel, then trim the context prefix."""
-    if abs(rate - 1.0) < 0.005:
+    """Stretch/pitch-shift one chunk for all stems in parallel, then trim the
+    context prefix. Pitch doesn't change length, so the trim depends on rate only."""
+    if abs(rate - 1.0) < 0.005 and abs(pitch) < 1e-6:
         return {sid: d[context_len:].copy() for sid, d in stems_slice.items()}
 
     def _one(sid: str, data: np.ndarray) -> tuple[str, np.ndarray]:
-        out  = _rubberband_chunk(data, sr, rate)
+        out  = _rubberband_chunk(data, sr, rate, pitch)
         trim = min(int(context_len / rate), max(0, len(out) - 1))
         return sid, out[trim:]
 
@@ -130,6 +140,9 @@ class StemPlayer:
         # Tempo — only write from main thread; read from both callback and fill thread
         self._tempo:        float = 1.0   # rate in use by current queue contents
         self._target_tempo: float = 1.0   # rate requested by UI
+        # Pitch shift in semitones (independent of tempo). Same threading rules.
+        self._pitch:        float = 0.0
+        self._target_pitch: float = 0.0
 
         # Source position (in original-audio samples)
         #   _src_pos   — position the callback is currently at
@@ -183,6 +196,8 @@ class StemPlayer:
         self._chunk_off = 0
         self._tempo        = 1.0
         self._target_tempo = 1.0
+        self._pitch        = 0.0
+        self._target_pitch = 0.0
         with self._queue_lock:
             self._queue.clear()
             self._fill_gen += 1
@@ -278,6 +293,20 @@ class StemPlayer:
         if self.on_stretch_started:
             self.on_stretch_started()
 
+    def set_pitch(self, semitones: float) -> None:
+        """Shift pitch by *semitones* without changing speed. Takes effect
+        within ~one chunk, just like set_tempo()."""
+        semitones = max(-12.0, min(12.0, semitones))
+        self._target_pitch = semitones
+        with self._queue_lock:
+            self._fill_pos = self._src_pos   # re-fill from current position
+            self._queue.clear()
+            self._chunk_off = 0
+            self._fill_gen += 1
+        self._fill_event.set()
+        if self.on_stretch_started:
+            self.on_stretch_started()
+
     def has_audio(self) -> bool:
         return bool(self._stems)
 
@@ -310,10 +339,11 @@ class StemPlayer:
         mix *= self._master
         np.clip(mix, -1.0, 1.0, out=mix)
 
-        # Apply the current speed (pitch-preserving) in one rubberband pass.
-        rate = self._target_tempo
-        if abs(rate - 1.0) > 0.005:
-            mix = _rubberband_chunk(mix, self._sr, rate)
+        # Apply the current speed and pitch in one rubberband pass.
+        rate  = self._target_tempo
+        pitch = self._target_pitch
+        if abs(rate - 1.0) > 0.005 or abs(pitch) > 1e-6:
+            mix = _rubberband_chunk(mix, self._sr, rate, pitch)
             np.clip(mix, -1.0, 1.0, out=mix)
 
         sf.write(str(Path(out_path)), mix, self._sr)
@@ -368,6 +398,7 @@ class StemPlayer:
                     queue_depth = len(self._queue)
                     fill_pos    = self._fill_pos
                     rate        = self._target_tempo
+                    pitch       = self._target_pitch
                     gen         = self._fill_gen
 
                 if queue_depth >= QUEUE_DEPTH:
@@ -385,15 +416,16 @@ class StemPlayer:
                     for sid, data in self._stems.items()
                 }
 
-                # Stretch
-                stretched = _stretch_chunk(stems_slice, self._sr, rate, ctx_len)
+                # Stretch / pitch-shift
+                stretched = _stretch_chunk(stems_slice, self._sr, rate, ctx_len, pitch)
 
-                # Check if a load/seek/tempo-change invalidated this work
+                # Check if a load/seek/tempo/pitch-change invalidated this work
                 with self._queue_lock:
                     if self._fill_gen == gen and self._fill_pos == fill_pos:
                         self._queue.append((fill_pos, stretched))
                         self._fill_pos = end
                         self._tempo    = rate
+                        self._pitch    = pitch
 
                 # Signal UI that the first chunk is ready (hides the spinner)
                 if self.on_stretch_done:
