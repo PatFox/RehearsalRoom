@@ -13,7 +13,7 @@ from PySide6.QtGui import QPainter, QColor, QPen, QFont
 from PySide6.QtWidgets import (
     QFrame, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
     QComboBox, QSpinBox, QDialog, QLineEdit, QFormLayout, QDialogButtonBox,
-    QMenu,
+    QMenu, QMessageBox,
 )
 
 from ui.widgets import TimelineCoords, InlineEditLabel
@@ -473,6 +473,8 @@ class TabTimeline(TimelineCoords, QWidget):
 
     def mousePressEvent(self, e):
         self.setFocus()
+        if e.button() != Qt.MouseButton.LeftButton:
+            return                              # right-click → contextMenuEvent
         x, y = e.position().x(), e.position().y()
         if x < GUTTER_W or not self._track:
             return
@@ -542,6 +544,75 @@ class TabTimeline(TimelineCoords, QWidget):
             # trailing end handle selects the last bar
             n = len(self._track.bars)
             self._select_bar(min(bi, n - 1), mods)  # plain click → select
+
+    def contextMenuEvent(self, e):
+        if not self._track:
+            return
+        x = e.pos().x()
+        if x < GUTTER_W:
+            return
+        bi = self._bar_at_x(x)                       # clicked bar, or -1 if empty
+        ms = self._frac(x) * self._duration
+
+        # Target bars for copy/cut/delete: the selection if any, else the
+        # clicked/caret bar. The noun reflects the current selection.
+        sel = sorted(self._sel_bars)
+        if sel:
+            targets = sel
+            noun = "selected bar" if len(sel) == 1 else f"{len(sel)} bars"
+        else:
+            cur = bi if bi >= 0 else self._caret[0]
+            targets = [cur] if cur >= 0 else []
+            noun = "this bar"
+        has_clip = bool(_BAR_CLIPBOARD)
+
+        t = self._theme
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu {{ background: {t.surface}; border: 1px solid {t.border}; "
+            f"border-radius: 8px; padding: 4px; }}"
+            f"QMenu::item {{ padding: 6px 16px; color: {t.ink}; border-radius: 4px; }}"
+            f"QMenu::item:selected {{ background: {t.surface2}; }}"
+            f"QMenu::item:disabled {{ color: {t.ink3}; }}"
+            f"QMenu::separator {{ height: 1px; background: {t.border}; margin: 4px 6px; }}")
+        if bi >= 0:
+            menu.addAction("Insert new bar after",
+                           lambda: self.insert_bar_relative(bi, after=True))
+            menu.addAction("Insert new bar before",
+                           lambda: self.insert_bar_relative(bi, after=False))
+        else:
+            menu.addAction("Insert new bar", lambda: self.insert_bar_empty(ms))
+        menu.addSeparator()
+
+        a_copy = menu.addAction(f"Copy {noun}", lambda: self._copy_bars(targets))
+        a_cut = menu.addAction(f"Cut {noun}",
+                               lambda: (self._copy_bars(targets), self._delete_bars(targets)))
+        a_copy.setEnabled(bool(targets))
+        a_cut.setEnabled(bool(targets))
+        menu.addSeparator()
+
+        if bi >= 0:
+            pb_idx, pa_idx = bi, bi + 1
+        else:
+            pb_idx = pa_idx = sum(1 for b in self._track.bars if b.start_ms <= ms)
+        a_pb = menu.addAction("Paste before", lambda: self._paste_insert_at(pb_idx))
+        a_pa = menu.addAction("Paste after", lambda: self._paste_insert_at(pa_idx))
+        a_pb.setEnabled(has_clip)
+        a_pa.setEnabled(has_clip)
+        menu.addSeparator()
+
+        a_del = menu.addAction(f"Delete {noun}", lambda: self._confirm_delete(targets))
+        a_del.setEnabled(bool(targets))
+
+        menu.exec(e.globalPos())
+
+    def _confirm_delete(self, targets: list[int]):
+        if not targets:
+            return
+        n = len(targets)
+        msg = f"Delete {n} bar{'s' if n != 1 else ''}? This cannot be undone."
+        if QMessageBox.question(self, "Delete bars", msg) == QMessageBox.StandardButton.Yes:
+            self._delete_bars(sorted(targets))
 
     def wheelEvent(self, e):
         # Mirror WaveformWidget zoom, keeping the song fraction under the
@@ -823,22 +894,21 @@ class TabTimeline(TimelineCoords, QWidget):
                             tuplet=be.tuplet, rest=be.rest, notes=notes))
         return out
 
+    def _copy_bars(self, idx: list[int]):
+        if self._track and idx:
+            _BAR_CLIPBOARD[:] = [Bar.from_dict(self._track.bars[i].to_dict()) for i in idx]
+
     def copy_selection(self):
-        if not self._track:
-            return
-        idx = self._selected_bars()
-        if not idx:
-            return
-        _BAR_CLIPBOARD[:] = [Bar.from_dict(self._track.bars[i].to_dict()) for i in idx]
+        if self._track:
+            self._copy_bars(self._selected_bars())
 
     def cut_selection(self):
         if not self._track:
             return
         idx = self._selected_bars()
-        if not idx:
-            return
-        self.copy_selection()
-        self._delete_bars(idx)
+        if idx:
+            self._copy_bars(idx)
+            self._delete_bars(idx)
 
     def delete_selection(self):
         """Remove the selected bars (no clipboard). Anchors of remaining bars
@@ -892,13 +962,23 @@ class TabTimeline(TimelineCoords, QWidget):
         self.update()
 
     def _paste_insert(self):
-        """Insert clipboard bars as new bars after the caret bar, shifting
-        every later bar's anchors by the inserted total length."""
+        """Insert clipboard bars as new bars after the caret/selected bar."""
+        sel = self._selected_bars()
+        idx = (sel[-1] if sel else self._caret[0]) + 1
+        self._paste_insert_at(idx)
+
+    def _paste_insert_at(self, idx: int):
+        """Insert the clipboard bars at *idx* (before the bar currently there),
+        shifting every later bar's anchors by the inserted total length."""
+        if not _BAR_CLIPBOARD or not self._track:
+            return
         bars = self._track.bars
         nstr = self._strings()
-        sel = self._selected_bars()
-        idx = (sel[-1] if sel else self._caret[0]) + 1   # insert after last selected/caret bar
-        boundary = bars[idx].start_ms if idx < len(bars) else bars[-1].end_ms
+        idx = max(0, min(idx, len(bars)))
+        if idx < len(bars):
+            boundary = bars[idx].start_ms
+        else:
+            boundary = bars[-1].end_ms if bars else 0
         lengths = [(cb.length_ms or 2000) for cb in _BAR_CLIPBOARD]
         total = sum(lengths)
         for b in bars[idx:]:
@@ -912,9 +992,65 @@ class TabTimeline(TimelineCoords, QWidget):
                            beats=self._clone_beats(cb.beats, nstr)))
             cur += ln
         bars[idx:idx] = new
+        self._sel_bars = set()
         self._caret = (idx, 0, self._caret[2])
         self.changed.emit()
         self.update()
+
+    # ------------------------------------------------------------- bar insertion
+    def _insert_bar(self, idx: int, start_ms: int, length: int,
+                    ts_num: int, ts_den: int, shift: bool):
+        bars = self._track.bars
+        if shift:
+            for b in bars[idx:]:
+                b.start_ms += length
+                b.end_ms += length
+        bar = Bar(ts_num=ts_num, ts_den=ts_den, start_ms=start_ms, end_ms=start_ms + length)
+        bars[idx:idx] = [bar]
+        self._sel_bars = set()
+        self._caret = (idx, 0, self._caret[2])
+        self.changed.emit()
+        self._reveal_bar(idx)
+        self.update()
+
+    def insert_bar_relative(self, bi: int, after: bool):
+        """Insert a new empty bar before/after bar *bi*, matching its length
+        and time signature; shifts later bars to make room."""
+        bars = self._track.bars
+        if not (0 <= bi < len(bars)):
+            return
+        ref = bars[bi]
+        length = ref.length_ms or (min(3000, self._duration) or 3000)
+        if after:
+            self._insert_bar(bi + 1, ref.end_ms, length, ref.ts_num, ref.ts_den, shift=True)
+        else:
+            self._insert_bar(bi, ref.start_ms, length, ref.ts_num, ref.ts_den, shift=True)
+
+    def insert_bar_empty(self, ms: float):
+        """Insert a new bar into empty space at *ms* without overlapping any
+        existing bar (fills the gap; no shifting)."""
+        bars = self._track.bars
+        default_len = min(3000, self._duration) or 3000
+        if not bars:
+            end = min(default_len, self._duration) if self._duration > 1 else default_len
+            self._insert_bar(0, 0, end, self._track.def_ts_num,
+                             self._track.def_ts_den, shift=False)
+            return
+        # gap around ms: right edge of the nearest bar on the left, left edge of
+        # the nearest bar on the right.
+        gap_start = 0
+        gap_end = self._duration
+        for b in bars:
+            if b.end_ms <= ms:
+                gap_start = max(gap_start, b.end_ms)
+            if b.start_ms > ms:
+                gap_end = min(gap_end, b.start_ms)
+        end = min(gap_start + default_len, gap_end)
+        if end - gap_start < 50:
+            return                               # no room to fit a bar here
+        idx = sum(1 for b in bars if b.start_ms < gap_start)
+        self._insert_bar(idx, gap_start, end - gap_start,
+                         self._track.def_ts_num, self._track.def_ts_den, shift=False)
 
 
 # --------------------------------------------------------------------------- #
