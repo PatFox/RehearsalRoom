@@ -112,6 +112,8 @@ class TabTimeline(TimelineCoords, QWidget):
     zoom_scroll_changed = Signal(float, float)    # zoom, scroll_frac
     tab_renamed         = Signal(str)             # new name for the current tab
     tab_switch          = Signal(int)             # switch to tab at this index
+    undo_requested      = Signal()
+    redo_requested      = Signal()
 
     _gutter = GUTTER_W
 
@@ -131,6 +133,8 @@ class TabTimeline(TimelineCoords, QWidget):
         # Handle press state: (bar_index, press_x, modifiers, is_dragging) or None
         self._press = None
         self._ts_rects = []            # (bar_index, QRectF) time-sig click hotspots
+        self._can_undo = False
+        self._can_redo = False
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -578,6 +582,13 @@ class TabTimeline(TimelineCoords, QWidget):
             f"QMenu::item:selected {{ background: {t.surface2}; }}"
             f"QMenu::item:disabled {{ color: {t.ink3}; }}"
             f"QMenu::separator {{ height: 1px; background: {t.border}; margin: 4px 6px; }}")
+
+        a_undo = menu.addAction("Undo", lambda: self.undo_requested.emit())
+        a_undo.setEnabled(self._can_undo)
+        a_redo = menu.addAction("Redo", lambda: self.redo_requested.emit())
+        a_redo.setEnabled(self._can_redo)
+        menu.addSeparator()
+
         if bi >= 0:
             menu.addAction("Insert new bar after",
                            lambda: self.insert_bar_relative(bi, after=True))
@@ -685,13 +696,22 @@ class TabTimeline(TimelineCoords, QWidget):
             b.end_ms += delta
 
     # ------------------------------------------------------------- keyboard
+    def set_undo_state(self, can_undo: bool, can_redo: bool):
+        self._can_undo = can_undo
+        self._can_redo = can_redo
+
     def keyPressEvent(self, e):
-        if not self._track or self._caret[0] < 0:
-            return super().keyPressEvent(e)
         key = e.key()
         mods = e.modifiers()
         ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
         shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
+        # Undo/redo work regardless of caret state.
+        if ctrl and key == Qt.Key.Key_Z and not shift:
+            self.undo_requested.emit(); return
+        if (ctrl and key == Qt.Key.Key_Y) or (ctrl and shift and key == Qt.Key.Key_Z):
+            self.redo_requested.emit(); return
+        if not self._track or self._caret[0] < 0:
+            return super().keyPressEvent(e)
         bi, col, row = self._caret
 
         # selection / clipboard
@@ -1096,6 +1116,11 @@ class TabEditorPanel(QFrame):
         self._lane_ids: list[str] = []
         self._duration = 1
         self._cur = -1
+        # Undo/redo: snapshots of the full tab state (tracks + current index).
+        self._undo: list = []
+        self._redo: list = []
+        self._baseline = ([], -1)
+        self._restoring = False
         self.setStyleSheet(
             f"TabEditorPanel {{ background: {theme.surface}; "
             f"border-top: 1px solid {theme.border}; }}")
@@ -1130,11 +1155,13 @@ class TabEditorPanel(QFrame):
         root.addLayout(pal)
 
         self._timeline = TabTimeline(self._theme)
-        self._timeline.changed.connect(self.changed)
+        self._timeline.changed.connect(self._commit)
         self._timeline.seek_requested.connect(self.seek_requested)
         self._timeline.zoom_scroll_changed.connect(self.zoom_scroll_changed)
         self._timeline.tab_renamed.connect(self._on_tab_renamed)
         self._timeline.tab_switch.connect(self._on_tab_switch)
+        self._timeline.undo_requested.connect(self.undo)
+        self._timeline.redo_requested.connect(self.redo)
         root.addWidget(self._timeline)
 
     # ------------------------------------------------------------- public API
@@ -1148,6 +1175,10 @@ class TabEditorPanel(QFrame):
     def set_tabs(self, tracks: list[TabTrack]):
         self._tracks = list(tracks or [])
         self._cur = 0 if self._tracks else -1
+        self._undo.clear()
+        self._redo.clear()
+        self._baseline = self._snapshot()      # baseline = the loaded state
+        self._update_undo_state()
         self._show_current()
 
     def tabs(self) -> list[TabTrack]:
@@ -1183,22 +1214,65 @@ class TabEditorPanel(QFrame):
         self._tracks.append(track)
         self._cur = len(self._tracks) - 1
         self._show_current()
-        self.changed.emit()
+        self._commit()
 
     def _on_tab_switch(self, idx: int):
         if 0 <= idx < len(self._tracks):
             self._cur = idx
-            self._show_current()
+            self._show_current()        # switching tabs is view-only, not undoable
 
     def _on_tab_renamed(self, name: str):
         track = self._cur_track()
         if track and name:
             track.name = name
-            self.changed.emit()
             self._update_header()
+            self._commit()
 
     def _palette_tech(self, tech: str):
         self._timeline._toggle_technique(tech)
 
     def _cur_track(self) -> TabTrack | None:
         return self._tracks[self._cur] if 0 <= self._cur < len(self._tracks) else None
+
+    # ------------------------------------------------------------- undo / redo
+    def _snapshot(self):
+        return ([t.to_dict() for t in self._tracks], self._cur)
+
+    def _update_undo_state(self):
+        self._timeline.set_undo_state(bool(self._undo), bool(self._redo))
+
+    def _commit(self):
+        """Record an undo point and persist. Called after any tab data change."""
+        if self._restoring:
+            return
+        self._undo.append(self._baseline)
+        if len(self._undo) > 100:
+            self._undo.pop(0)
+        self._baseline = self._snapshot()
+        self._redo.clear()
+        self._update_undo_state()
+        self.changed.emit()
+
+    def _restore(self, snap):
+        tracks, cur = snap
+        self._restoring = True
+        self._tracks = [TabTrack.from_dict(d) for d in tracks]
+        self._cur = cur if 0 <= cur < len(self._tracks) else (0 if self._tracks else -1)
+        self._show_current()
+        self._restoring = False
+        self._update_undo_state()
+        self.changed.emit()             # persist the restored state (no new undo point)
+
+    def undo(self):
+        if not self._undo:
+            return
+        self._redo.append(self._baseline)
+        self._baseline = self._undo.pop()
+        self._restore(self._baseline)
+
+    def redo(self):
+        if not self._redo:
+            return
+        self._undo.append(self._baseline)
+        self._baseline = self._redo.pop()
+        self._restore(self._baseline)
