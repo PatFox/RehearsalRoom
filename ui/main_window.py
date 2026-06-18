@@ -970,11 +970,17 @@ class MainWindow(QMainWindow):
         sigs = [getattr(worker, name) for name in
                 ("progress", "finished", "error", "info_ready", "done")
                 if hasattr(worker, name)]
-        for sig in sigs:
-            try:
-                sig.disconnect()
-            except (RuntimeError, TypeError):
-                pass
+        import warnings
+        with warnings.catch_warnings():
+            # disconnect() on a signal with no connections (e.g. QThread's
+            # built-in finished() on workers that never use it) emits a
+            # libpyside RuntimeWarning — harmless, just silence it.
+            warnings.simplefilter("ignore", RuntimeWarning)
+            for sig in sigs:
+                try:
+                    sig.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
         # Cooperative cancel only. NEVER call terminate(): force-killing a
         # Python QThread mid-execution can leave the GIL locked and deadlock
         # the whole process. The worker checks isInterruptionRequested() at

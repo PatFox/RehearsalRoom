@@ -23,8 +23,8 @@ GUTTER_W = 244        # match Ruler / lane head width
 ROW_GAP  = 18         # px between string lines
 TOP_PAD  = 24         # room for time-signature labels
 BOT_PAD  = 18
-_HANDLE_HIT = 6       # px hit radius for a bar-end resize handle
-_SEL_HANDLE_W = 14    # px width of the clickable bar-select handle (top of barline)
+_HANDLE_H = 11        # px height of the per-bar handle below the grid
+_DRAG_SLOP = 4        # px of movement before a handle press becomes a resize drag
 _SUBDIV = 4           # editing-grid columns per beat (16th-note grid in 4/4)
 
 # In-app bar clipboard: cloned Bar objects (content + original length; ms
@@ -55,7 +55,8 @@ class TabTimeline(TimelineCoords, QWidget):
         self._sel_bars: set[int] = set()   # selected bar indices (via start handles)
         self._sel_pivot = -1               # last handle clicked (for Shift range)
         self._fret_session = False     # True while consecutive digits build one fret
-        self._drag_bar = -1            # bar whose end-handle is being dragged
+        # Handle press state: (bar_index, press_x, modifiers, is_dragging) or None
+        self._press = None
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._apply_height()
@@ -213,29 +214,23 @@ class TabTimeline(TimelineCoords, QWidget):
                 p.setPen(QPen(gc, 1))
                 p.drawLine(QPointF(gx, gy0), QPointF(gx, gy1))
 
-            # barline
+            # barline (start) — purely visual, not draggable
             p.setPen(QPen(QColor(t.ink3), 1))
             p.drawLine(QPointF(x0, TOP_PAD - 6), QPointF(x0, self._row_y(nstr - 1) + 6))
 
-            # clickable bar-select handle at the top of the start line
-            hcol = QColor(accent) if selected else QColor(t.ink3)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(hcol)
-            p.drawRoundedRect(QRectF(x0, 2, _SEL_HANDLE_W, TOP_PAD - 8), 2, 2)
-            # two grip lines so it reads as a handle
-            grip = QColor(t.surface); grip.setAlpha(200)
-            p.setPen(QPen(grip, 1))
-            gx = x0 + _SEL_HANDLE_W / 2
-            p.drawLine(QPointF(gx - 2, 6), QPointF(gx - 2, TOP_PAD - 8))
-            p.drawLine(QPointF(gx + 2, 6), QPointF(gx + 2, TOP_PAD - 8))
+            p.setFont(QFont("Consolas", 8))
 
-            # time signature (only when it changes), to the right of the handle
+            # time signature (only when it changes from the previous bar)
             prev = self._track.bars[bi - 1] if bi > 0 else None
             if prev is None or (prev.ts_num, prev.ts_den) != (bar.ts_num, bar.ts_den):
-                p.setFont(QFont("Consolas", 8))
                 p.setPen(QColor(t.ink2))
-                p.drawText(QPointF(x0 + _SEL_HANDLE_W + 3, TOP_PAD - 9),
-                           f"{bar.ts_num}/{bar.ts_den}")
+                p.drawText(QPointF(x0 + 3, TOP_PAD - 9), f"{bar.ts_num}/{bar.ts_den}")
+
+            # sequential bar number, centred over the bar (same line/font as the ts)
+            num = str(bi + 1)
+            tw = p.fontMetrics().horizontalAdvance(num)
+            p.setPen(QColor(t.ink3))
+            p.drawText(QPointF((x0 + x1) / 2 - tw / 2, TOP_PAD - 9), num)
 
             # notes
             for beat in bar.beats:
@@ -253,9 +248,24 @@ class TabTimeline(TimelineCoords, QWidget):
                 p.setPen(QPen(accent, 1))
                 p.drawRect(QRectF(cx - 8, cy - ROW_GAP / 2, 16, ROW_GAP))
 
-            # bar-end resize handle
-            p.setPen(QPen(accent if bi == self._drag_bar else QColor(t.ink3), 2))
-            p.drawLine(QPointF(x1, TOP_PAD - 6), QPointF(x1, self._row_y(nstr - 1) + 6))
+            # final bar's end line + trailing end handle (resizes the last bar's end)
+            if bi == len(self._track.bars) - 1:
+                p.setPen(QPen(QColor(t.ink3), 1))
+                p.drawLine(QPointF(x1, TOP_PAD - 6), QPointF(x1, self._row_y(nstr - 1) + 6))
+                edrag = self._press is not None and self._press[0] == len(self._track.bars) and self._press[3]
+                ecol = QColor(accent) if (selected or edrag) else QColor(t.surface3)
+                p.setPen(QPen(QColor(t.border_strong), 1))
+                p.setBrush(ecol)
+                p.drawRoundedRect(self._end_handle_rect(), 2, 2)
+
+            # small square handle below the grid, left edge on the bar's start
+            # line: click selects the bar, drag moves the start boundary.
+            hr = self._handle_rect(bar)
+            dragging = self._press is not None and self._press[0] == bi and self._press[3]
+            hcol = QColor(accent) if (selected or dragging) else QColor(t.surface3)
+            p.setPen(QPen(QColor(t.border_strong), 1))
+            p.setBrush(hcol)
+            p.drawRoundedRect(hr, 2, 2)
 
     def _paint_note(self, p: QPainter, x: float, note: Note, bar: Bar):
         t = self._theme
@@ -292,52 +302,61 @@ class TabTimeline(TimelineCoords, QWidget):
                 return bi
         return -1
 
-    def _end_handle_at(self, x: float) -> int:
-        if not self._track:
-            return -1
-        for bi, bar in enumerate(self._track.bars):
-            if abs(x - self._x_for_ms(bar.end_ms)) <= _HANDLE_HIT:
-                return bi
-        return -1
+    def _handle_band_y(self) -> float:
+        return self._row_y(self._strings() - 1) + 4
 
-    def _sel_handle_at(self, x: float, y: float) -> int:
-        if not self._track or y > TOP_PAD:
+    def _handle_rect(self, bar: Bar) -> QRectF:
+        # small square; its left edge sits on the bar's start line
+        return QRectF(self._x_for_ms(bar.start_ms), self._handle_band_y(),
+                      _HANDLE_H, _HANDLE_H)
+
+    def _end_handle_rect(self) -> QRectF:
+        # trailing square for the last bar's end; right edge on the end line
+        x1 = self._x_for_ms(self._track.bars[-1].end_ms)
+        return QRectF(x1 - _HANDLE_H, self._handle_band_y(), _HANDLE_H, _HANDLE_H)
+
+    def _handle_at(self, x: float, y: float):
+        """Bar index for a start handle, len(bars) for the trailing end handle,
+        or -1. (len(bars) is the sentinel for 'resize the last bar's end'.)"""
+        if not self._track or not self._track.bars:
+            return -1
+        y0 = self._handle_band_y()
+        if y < y0 or y > y0 + _HANDLE_H:
             return -1
         for bi, bar in enumerate(self._track.bars):
             hx = self._x_for_ms(bar.start_ms)
-            if hx - 2 <= x <= hx + _SEL_HANDLE_W + 2:
+            if hx <= x <= hx + _HANDLE_H:
                 return bi
+        er = self._end_handle_rect()
+        if er.left() <= x <= er.right():
+            return len(self._track.bars)
         return -1
+
+    def _select_bar(self, bi: int, mods):
+        if mods & Qt.KeyboardModifier.ControlModifier:
+            self._sel_bars ^= {bi}                          # toggle
+        elif mods & Qt.KeyboardModifier.ShiftModifier and self._sel_pivot >= 0:
+            lo, hi = sorted((self._sel_pivot, bi))
+            self._sel_bars = set(range(lo, hi + 1))         # range from pivot
+        else:
+            self._sel_bars = {bi}                           # select just this
+        self._sel_pivot = bi
+        self._caret = (bi, 0, self._caret[2])               # follow for note entry
+        self.update()
 
     def mousePressEvent(self, e):
         self.setFocus()
         x, y = e.position().x(), e.position().y()
         if x < GUTTER_W or not self._track:
             return
-        mods = e.modifiers()
 
-        # bar-select handle (top of the start line)
-        bi = self._sel_handle_at(x, y)
+        # handle below the grid → press (becomes click=select or drag=resize)
+        bi = self._handle_at(x, y)
         if bi >= 0:
-            if mods & Qt.KeyboardModifier.ControlModifier:
-                self._sel_bars ^= {bi}                      # toggle
-            elif mods & Qt.KeyboardModifier.ShiftModifier and self._sel_pivot >= 0:
-                lo, hi = sorted((self._sel_pivot, bi))
-                self._sel_bars = set(range(lo, hi + 1))     # range from pivot
-            else:
-                self._sel_bars = {bi}                       # select just this
-            self._sel_pivot = bi
-            self._caret = (bi, 0, self._caret[2])           # follow for note entry
-            self.update()
+            self._press = (bi, x, e.modifiers(), False)
             return
 
-        # bar-end drag-resize
-        bi = self._end_handle_at(x)
-        if bi >= 0:
-            self._drag_bar = bi
-            return
-
-        # otherwise place the caret (clears any bar selection)
+        # otherwise place the caret in the grid (clears any bar selection)
         bi = self._bar_at_x(x)
         if bi < 0:
             return
@@ -345,32 +364,42 @@ class TabTimeline(TimelineCoords, QWidget):
         ncols = self._ncols(bar)
         frac_in_bar = (self._frac(x) * self._duration - bar.start_ms) / max(1, bar.length_ms)
         col = max(0, min(ncols - 1, round(frac_in_bar * ncols)))
-        row = max(0, min(self._strings() - 1, round((e.position().y() - TOP_PAD) / ROW_GAP)))
+        row = max(0, min(self._strings() - 1, round((y - TOP_PAD) / ROW_GAP)))
         self._sel_bars = set()
         self._caret = (bi, col, row)
         self._fret_session = False
         self.update()
 
     def mouseMoveEvent(self, e):
-        x = e.position().x()
-        if self._drag_bar >= 0 and self._track:
-            ms = max(self._track.bars[self._drag_bar].start_ms + 50,
-                     int(self._frac(x) * self._duration))
-            self._set_bar_end(self._drag_bar, ms)
-            self.update()
+        x, y = e.position().x(), e.position().y()
+        if self._press is not None and self._track:
+            bi, px, mods, dragging = self._press
+            if not dragging and abs(x - px) > _DRAG_SLOP:
+                dragging = True
+                self._press = (bi, px, mods, True)
+            if dragging:
+                ms = int(self._frac(x) * self._duration)
+                if bi >= len(self._track.bars):
+                    self._set_bar_end(len(self._track.bars) - 1, ms)   # trailing handle
+                else:
+                    self._set_bar_start(bi, ms)
+                self.update()
             return
-        # cursor hint: pointing hand over a select handle, resize over a bar end
-        if self._sel_handle_at(x, e.position().y()) >= 0:
-            self.setCursor(Qt.CursorShape.PointingHandCursor)
-        elif self._end_handle_at(x) >= 0:
-            self.setCursor(Qt.CursorShape.SizeHorCursor)
-        else:
-            self.setCursor(Qt.CursorShape.ArrowCursor)
+        # cursor hint: pointing hand over a handle
+        self.setCursor(Qt.CursorShape.PointingHandCursor if self._handle_at(x, y) >= 0
+                       else Qt.CursorShape.ArrowCursor)
 
     def mouseReleaseEvent(self, e):
-        if self._drag_bar >= 0:
-            self._drag_bar = -1
-            self.changed.emit()
+        if self._press is None:
+            return
+        bi, px, mods, dragging = self._press
+        self._press = None
+        if dragging:
+            self.changed.emit()        # resize finished
+        else:
+            # trailing end handle selects the last bar
+            n = len(self._track.bars)
+            self._select_bar(min(bi, n - 1), mods)  # plain click → select
 
     def wheelEvent(self, e):
         # Mirror WaveformWidget zoom, keeping the song fraction under the
@@ -395,10 +424,22 @@ class TabTimeline(TimelineCoords, QWidget):
         self.zoom_scroll_changed.emit(new_zoom, max(0.0, min(1.0, frac)))
         e.accept()
 
+    def _set_bar_start(self, bi: int, ms: int):
+        """Move bar *bi*'s start boundary (= previous bar's end), clamped between
+        its neighbours so bars stay ordered and within the song."""
+        bars = self._track.bars
+        lo = bars[bi - 1].start_ms + 50 if bi > 0 else 0
+        hi = bars[bi].end_ms - 50
+        ms = max(lo, min(ms, hi))
+        bars[bi].start_ms = ms
+        if bi > 0:
+            bars[bi - 1].end_ms = ms
+
     def _set_bar_end(self, bi: int, ms: int):
         bars = self._track.bars
         if self._duration > 1:
             ms = min(ms, self._duration)          # never anchor past the song end
+        ms = max(bars[bi].start_ms + 50, ms)      # keep end after start
         bars[bi].end_ms = ms
         if bi + 1 < len(bars):
             bars[bi + 1].start_ms = ms
@@ -596,11 +637,24 @@ class TabTimeline(TimelineCoords, QWidget):
         bi = self._caret[0]
         if bi < 0:
             bi = len(self._track.bars) - 1
-        if bi >= 0:
-            self._track.bars[bi].ts_num = num
-            self._track.bars[bi].ts_den = den
-            self.changed.emit()
-            self.update()
+        if bi < 0:
+            return
+        bar = self._track.bars[bi]
+        old_n = self._ncols(bar)            # columns under the current grid
+        bar.ts_num = num
+        bar.ts_den = den
+        new_n = self._ncols(bar)            # columns under the new grid
+        # Re-quantise notes: keep each beat's column (its position from the bar
+        # start), snap to the new grid, and drop any that fall outside the bar.
+        kept = []
+        for beat in bar.beats:
+            col = round(beat.pos * old_n)
+            if col < new_n:
+                beat.pos = col / new_n
+                kept.append(beat)
+        bar.beats = kept
+        self.changed.emit()
+        self.update()
 
     # ------------------------------------------------------------- selection + clipboard
     def _selected_bars(self) -> list[int]:
