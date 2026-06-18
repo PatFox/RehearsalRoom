@@ -129,6 +129,8 @@ class TabTrack:
     strings: int = 6
     tuning: list[str] = field(default_factory=lambda: default_tuning(6))
     capo: int = 0
+    def_ts_num: int = 4       # default time signature for new bars
+    def_ts_den: int = 4
     bars: list[Bar] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -139,6 +141,8 @@ class TabTrack:
             "strings": self.strings,
             "tuning": list(self.tuning),
             "capo": self.capo,
+            "def_ts_num": self.def_ts_num,
+            "def_ts_den": self.def_ts_den,
             "bars": [b.to_dict() for b in self.bars],
         }
 
@@ -152,6 +156,8 @@ class TabTrack:
             strings=strings,
             tuning=list(d.get("tuning") or default_tuning(strings)),
             capo=int(d.get("capo", 0)),
+            def_ts_num=int(d.get("def_ts_num", 4)),
+            def_ts_den=int(d.get("def_ts_den", 4)),
             bars=[Bar.from_dict(b) for b in d.get("bars", [])],
         )
 

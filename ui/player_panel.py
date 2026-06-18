@@ -307,6 +307,7 @@ class StemLane(QFrame):
     zoom_scroll_changed = Signal(float, float)   # zoom, scroll_frac
     loop_cleared        = Signal()
     label_changed       = Signal(str, str)        # stem_id, new_label
+    add_tab_requested   = Signal(str)             # stem_id
 
     LANE_HEIGHT = 65
 
@@ -360,6 +361,19 @@ class StemLane(QFrame):
 
         top_row.addWidget(bar)
         top_row.addWidget(self._name_lbl, 1)
+        # "Add tab" button, left of mute — every lane except the original mix
+        if self._id != "original":
+            tab_btn = QPushButton("Tab")
+            tab_btn.setFixedHeight(25)
+            tab_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            tab_btn.setToolTip("Add a tablature track for this lane")
+            tab_btn.setStyleSheet(
+                "QPushButton { background: #F4F4F0; color: #5F5E5A; "
+                "border: 1px solid transparent; border-radius: 7px; padding: 0 8px; "
+                "font-size: 11px; font-weight: 700; }"
+                "QPushButton:hover { background: rgba(46,107,255,0.12); color: #2E6BFF; }")
+            tab_btn.clicked.connect(lambda: self.add_tab_requested.emit(self._id))
+            top_row.addWidget(tab_btn)
         top_row.addWidget(self._mute_btn)
         top_row.addWidget(self._solo_btn)
         head_lay.addLayout(top_row)
@@ -1352,6 +1366,7 @@ class PlayerPanel(QWidget):
         lane.loop_cleared.connect(self._clear_loop)
         lane.handle_moved.connect(self._on_handle_moved)
         lane.zoom_scroll_changed.connect(self._on_zoom_scroll)
+        lane.add_tab_requested.connect(self._on_add_tab)
 
     def _rebuild_lanes(self, song: dict, waveforms: dict | None = None):
         # remove old lanes
@@ -1563,6 +1578,17 @@ class PlayerPanel(QWidget):
 
     def _on_toggle_tab(self, on: bool):
         self._tab_editor.setVisible(on)
+
+    def _on_add_tab(self, stem_id: str):
+        from ui.tab_editor import TabSetupDialog
+        label = self._stem_labels.get(stem_id, stem_id.capitalize())
+        default_strings = 4 if stem_id == "bass" else 6
+        dlg = TabSetupDialog(label, default_strings, self._theme, self)
+        if dlg.exec():
+            name, strings, ts_num, ts_den = dlg.values()
+            self._tab_editor.create_tab(stem_id, name, strings, ts_num, ts_den)
+            self._tab_btn.setChecked(True)   # reveal the editor (also fires toggle)
+            self._tab_editor.setVisible(True)
 
     def _on_tab_changed(self):
         self.tab_changed.emit(self._tab_editor.tabs())

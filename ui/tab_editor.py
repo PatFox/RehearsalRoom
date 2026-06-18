@@ -8,14 +8,15 @@ drag-to-resize bar ends, keyboard + palette note entry, playback highlight.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal, QRectF, QPointF
+from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QPoint
 from PySide6.QtGui import QPainter, QColor, QPen, QFont
 from PySide6.QtWidgets import (
     QFrame, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-    QComboBox, QSpinBox,
+    QComboBox, QSpinBox, QDialog, QLineEdit, QFormLayout, QDialogButtonBox,
+    QMenu,
 )
 
-from ui.widgets import TimelineCoords
+from ui.widgets import TimelineCoords, InlineEditLabel
 from core.tab import (TabTrack, Bar, Beat, Note, default_tuning,
                       beat_ms, find_bar, active_bar_beat)
 
@@ -33,12 +34,84 @@ _SUBDIV = 4           # editing-grid columns per beat (16th-note grid in 4/4)
 _BAR_CLIPBOARD: list = []
 
 
+class TabSetupDialog(QDialog):
+    """Modal dialog to create a tab: name, string count, default time sig."""
+
+    def __init__(self, default_name: str, default_strings: int, theme, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add tab")
+        self.setModal(True)
+        form = QFormLayout(self)
+
+        self._name = QLineEdit(default_name)
+        form.addRow("Name", self._name)
+
+        self._strings = QSpinBox()
+        self._strings.setRange(3, 8)
+        self._strings.setValue(default_strings)
+        form.addRow("Strings", self._strings)
+
+        ts_row = QHBoxLayout()
+        self._ts_num = QSpinBox(); self._ts_num.setRange(1, 16); self._ts_num.setValue(4)
+        self._ts_den = QComboBox(); self._ts_den.addItems(["1", "2", "4", "8", "16"])
+        self._ts_den.setCurrentText("4")
+        ts_row.addWidget(self._ts_num)
+        ts_row.addWidget(QLabel("/"))
+        ts_row.addWidget(self._ts_den)
+        ts_row.addStretch(1)
+        ts_w = QWidget(); ts_w.setLayout(ts_row)
+        form.addRow("Default time signature", ts_w)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+        self._name.setFocus()
+        self._name.selectAll()
+
+    def values(self) -> tuple[str, int, int, int]:
+        name = self._name.text().strip() or "Tab"
+        return name, self._strings.value(), self._ts_num.value(), int(self._ts_den.currentText())
+
+
+class _TimeSigPopup(QFrame):
+    """Small floating editor shown next to a bar's time signature."""
+    chosen = Signal(int, int)   # numerator, denominator (emitted live)
+
+    def __init__(self, num: int, den: int, theme, parent=None):
+        super().__init__(parent, Qt.WindowType.Popup)
+        self.setStyleSheet(
+            f"QFrame {{ background: {theme.surface}; "
+            f"border: 1px solid {theme.border_strong}; border-radius: 6px; }}")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(4)
+        self._num = QSpinBox()
+        self._num.setRange(1, 16)
+        self._num.setValue(num)
+        self._den = QComboBox()
+        self._den.addItems(["1", "2", "4", "8", "16"])
+        self._den.setCurrentText(str(den) if str(den) in ("1", "2", "4", "8", "16") else "4")
+        slash = QLabel("/")
+        lay.addWidget(self._num)
+        lay.addWidget(slash)
+        lay.addWidget(self._den)
+        self._num.valueChanged.connect(self._emit)
+        self._den.currentTextChanged.connect(self._emit)
+
+    def _emit(self, *_):
+        self.chosen.emit(self._num.value(), int(self._den.currentText()))
+
+
 class TabTimeline(TimelineCoords, QWidget):
     """The drawable/editable tab canvas for one TabTrack."""
 
     seek_requested      = Signal(float)          # fraction 0-1
     changed             = Signal()                # tab data mutated → persist
     zoom_scroll_changed = Signal(float, float)    # zoom, scroll_frac
+    tab_renamed         = Signal(str)             # new name for the current tab
+    tab_switch          = Signal(int)             # switch to tab at this index
 
     _gutter = GUTTER_W
 
@@ -57,9 +130,61 @@ class TabTimeline(TimelineCoords, QWidget):
         self._fret_session = False     # True while consecutive digits build one fret
         # Handle press state: (bar_index, press_x, modifiers, is_dragging) or None
         self._press = None
+        self._ts_rects = []            # (bar_index, QRectF) time-sig click hotspots
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        # Gutter header: editable tab name + (when >1 tab) a switch dropdown.
+        self._others: list = []        # [(index, name)] of the other tabs
+        self._gutter_bar = QWidget(self)
+        gl = QHBoxLayout(self._gutter_bar)
+        gl.setContentsMargins(10, 2, 6, 0)
+        gl.setSpacing(4)
+        _name_style = ("font-size: 14px; font-weight: 600; background: transparent; border: none;")
+        self._name_edit = InlineEditLabel(
+            "", label_style=_name_style,
+            edit_style=_name_style + " border-bottom: 1px solid #2E6BFF;")
+        self._name_edit.committed.connect(lambda v: self.tab_renamed.emit(v))
+        self._switch_btn = QPushButton("▾")
+        self._switch_btn.setFixedSize(20, 20)
+        self._switch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._switch_btn.setToolTip("Switch to another tab")
+        self._switch_btn.setStyleSheet(
+            "QPushButton { border: none; background: transparent; font-size: 12px; "
+            f"color: {theme.ink2}; border-radius: 4px; }}"
+            f"QPushButton:hover {{ background: {theme.surface3}; }}")
+        self._switch_btn.clicked.connect(self._open_switch_menu)
+        gl.addWidget(self._name_edit, 1)
+        gl.addWidget(self._switch_btn)
+        self._gutter_bar.hide()
+
         self._apply_height()
+
+    def resizeEvent(self, e):
+        self._gutter_bar.setGeometry(0, 2, GUTTER_W, 22)
+        super().resizeEvent(e)
+
+    def set_header(self, name: str | None, others: list):
+        """Show the current tab's name in the gutter; *others* = [(idx, name)]
+        of the tabs you can switch to (empty hides the switch button)."""
+        if not name:
+            self._gutter_bar.hide()
+            return
+        self._name_edit.setText(name)
+        self._others = list(others)
+        self._switch_btn.setVisible(bool(others))
+        self._gutter_bar.setGeometry(0, 2, GUTTER_W, 22)
+        self._gutter_bar.show()
+        self._gutter_bar.raise_()
+
+    def _open_switch_menu(self):
+        if not self._others:
+            return
+        menu = QMenu(self)
+        for idx, nm in self._others:
+            act = menu.addAction(nm)
+            act.triggered.connect(lambda _=False, i=idx: self.tab_switch.emit(i))
+        menu.exec(self._switch_btn.mapToGlobal(QPoint(0, self._switch_btn.height())))
 
     # ------------------------------------------------------------------ state
     def set_track(self, track: TabTrack | None):
@@ -181,6 +306,7 @@ class TabTimeline(TimelineCoords, QWidget):
         accent = QColor(t.accent)
         ms_now = self._progress * self._duration
         act_bar, act_beat = active_bar_beat(self._track, ms_now)
+        self._ts_rects = []          # (bar_index, QRectF) clickable time-sig hotspots
 
         for bi, bar in enumerate(self._track.bars):
             x0 = self._x_for_ms(bar.start_ms)
@@ -220,11 +346,12 @@ class TabTimeline(TimelineCoords, QWidget):
 
             p.setFont(QFont("Consolas", 8))
 
-            # time signature (only when it changes from the previous bar)
-            prev = self._track.bars[bi - 1] if bi > 0 else None
-            if prev is None or (prev.ts_num, prev.ts_den) != (bar.ts_num, bar.ts_den):
-                p.setPen(QColor(t.ink2))
-                p.drawText(QPointF(x0 + 3, TOP_PAD - 9), f"{bar.ts_num}/{bar.ts_den}")
+            # time signature — shown on every bar and clickable to edit
+            ts_text = f"{bar.ts_num}/{bar.ts_den}"
+            p.setPen(QColor(t.accent))
+            p.drawText(QPointF(x0 + 3, TOP_PAD - 9), ts_text)
+            tsw = p.fontMetrics().horizontalAdvance(ts_text)
+            self._ts_rects.append((bi, QRectF(x0 + 1, 0, tsw + 6, TOP_PAD - 2)))
 
             # sequential bar number, centred over the bar (same line/font as the ts)
             num = str(bi + 1)
@@ -350,6 +477,12 @@ class TabTimeline(TimelineCoords, QWidget):
         if x < GUTTER_W or not self._track:
             return
 
+        # clickable time signature (top of each bar) → floating editor popup
+        for bi, rect in self._ts_rects:
+            if rect.contains(x, y):
+                self._open_ts_popup(bi, e.globalPosition().toPoint())
+                return
+
         # handle below the grid → press (becomes click=select or drag=resize)
         bi = self._handle_at(x, y)
         if bi >= 0:
@@ -385,9 +518,18 @@ class TabTimeline(TimelineCoords, QWidget):
                     self._set_bar_start(bi, ms)
                 self.update()
             return
-        # cursor hint: pointing hand over a handle
-        self.setCursor(Qt.CursorShape.PointingHandCursor if self._handle_at(x, y) >= 0
+        # cursor hint: pointing hand over a handle or a time signature
+        over_ts = any(rect.contains(x, y) for _, rect in self._ts_rects)
+        self.setCursor(Qt.CursorShape.PointingHandCursor
+                       if (over_ts or self._handle_at(x, y) >= 0)
                        else Qt.CursorShape.ArrowCursor)
+
+    def _open_ts_popup(self, bi: int, global_pos):
+        bar = self._track.bars[bi]
+        pop = _TimeSigPopup(bar.ts_num, bar.ts_den, self._theme, self)
+        pop.chosen.connect(lambda n, d, b=bi: self.set_time_signature(n, d, b))
+        pop.move(global_pos.x() + 6, global_pos.y() + 4)
+        pop.show()
 
     def mouseReleaseEvent(self, e):
         if self._press is None:
@@ -596,7 +738,8 @@ class TabTimeline(TimelineCoords, QWidget):
             bar = Bar(ts_num=prev.ts_num, ts_den=prev.ts_den, start_ms=start, end_ms=end)
         else:
             end = min(default_len_ms, dur) if dur else default_len_ms
-            bar = Bar(ts_num=4, ts_den=4, start_ms=0, end_ms=end)
+            bar = Bar(ts_num=self._track.def_ts_num, ts_den=self._track.def_ts_den,
+                      start_ms=0, end_ms=end)
         bars.append(bar)
         self._caret = (len(bars) - 1, 0, self._caret[2])
         self.changed.emit()
@@ -633,11 +776,12 @@ class TabTimeline(TimelineCoords, QWidget):
         self.changed.emit()
         self.update()
 
-    def set_time_signature(self, num: int, den: int):
-        bi = self._caret[0]
-        if bi < 0:
-            bi = len(self._track.bars) - 1
-        if bi < 0:
+    def set_time_signature(self, num: int, den: int, bi: int | None = None):
+        if bi is None:
+            bi = self._caret[0]
+            if bi < 0:
+                bi = len(self._track.bars) - 1
+        if bi < 0 or bi >= len(self._track.bars):
             return
         bar = self._track.bars[bi]
         old_n = self._ncols(bar)            # columns under the current grid
@@ -805,34 +949,10 @@ class TabEditorPanel(QFrame):
         bar = QHBoxLayout()
         bar.setSpacing(8)
 
-        self._track_combo = QComboBox()
-        self._track_combo.currentIndexChanged.connect(self._on_track_selected)
-        bar.addWidget(QLabel("Tab:"))
-        bar.addWidget(self._track_combo)
-
-        new_btn = QPushButton("＋ New")
-        new_btn.clicked.connect(self._add_track)
-        bar.addWidget(new_btn)
-
-        bar.addSpacing(8)
-        bar.addWidget(QLabel("Lane:"))
-        self._lane_combo = QComboBox()
-        self._lane_combo.currentIndexChanged.connect(self._on_lane_changed)
-        bar.addWidget(self._lane_combo)
-
-        bar.addWidget(QLabel("Strings:"))
-        self._strings_combo = QComboBox()
-        self._strings_combo.addItems(["4", "5", "6", "7"])
-        self._strings_combo.currentTextChanged.connect(self._on_strings_changed)
-        bar.addWidget(self._strings_combo)
-
-        bar.addWidget(QLabel("Time sig:"))
-        self._ts_num = QSpinBox(); self._ts_num.setRange(1, 16); self._ts_num.setValue(4)
-        self._ts_den = QComboBox(); self._ts_den.addItems(["1", "2", "4", "8", "16"])
-        self._ts_den.setCurrentText("4")
-        self._ts_num.valueChanged.connect(self._apply_ts)
-        self._ts_den.currentTextChanged.connect(self._apply_ts)
-        bar.addWidget(self._ts_num); bar.addWidget(QLabel("/")); bar.addWidget(self._ts_den)
+        # Tabs are created from each lane's "Tab" button; lane + string count +
+        # default time signature are chosen there. The current tab's name (and a
+        # switch dropdown) live in the gutter to the left of the grid. Time
+        # signature is edited per bar by clicking it in the timeline.
 
         add_bar_btn = QPushButton("Add bar")
         add_bar_btn.clicked.connect(self._add_bar)
@@ -881,6 +1001,8 @@ class TabEditorPanel(QFrame):
         self._timeline.changed.connect(self.changed)
         self._timeline.seek_requested.connect(self.seek_requested)
         self._timeline.zoom_scroll_changed.connect(self.zoom_scroll_changed)
+        self._timeline.tab_renamed.connect(self._on_tab_renamed)
+        self._timeline.tab_switch.connect(self._on_tab_switch)
         root.addWidget(self._timeline)
 
     # ------------------------------------------------------------- public API
@@ -890,14 +1012,9 @@ class TabEditorPanel(QFrame):
 
     def set_lane_ids(self, lane_ids: list[str]):
         self._lane_ids = list(lane_ids)
-        self._lane_combo.blockSignals(True)
-        self._lane_combo.clear()
-        self._lane_combo.addItems(self._lane_ids)
-        self._lane_combo.blockSignals(False)
 
     def set_tabs(self, tracks: list[TabTrack]):
         self._tracks = list(tracks or [])
-        self._refresh_track_combo()
         self._cur = 0 if self._tracks else -1
         self._show_current()
 
@@ -911,68 +1028,47 @@ class TabEditorPanel(QFrame):
         self._timeline.set_progress(frac)
 
     # ------------------------------------------------------------- internals
-    def _refresh_track_combo(self):
-        self._track_combo.blockSignals(True)
-        self._track_combo.clear()
-        self._track_combo.addItems([t.name for t in self._tracks] or ["—"])
-        self._track_combo.blockSignals(False)
-
     def _show_current(self):
         track = self._tracks[self._cur] if 0 <= self._cur < len(self._tracks) else None
         self._timeline.set_track(track)
-        if track:
-            self._strings_combo.blockSignals(True)
-            self._strings_combo.setCurrentText(str(track.strings))
-            self._strings_combo.blockSignals(False)
-            if track.stem_id in self._lane_ids:
-                self._lane_combo.blockSignals(True)
-                self._lane_combo.setCurrentText(track.stem_id)
-                self._lane_combo.blockSignals(False)
+        self._update_header()
 
-    def _add_track(self, *_):
-        # Default 6-string guitar; name auto-incremented.
-        n = len(self._tracks) + 1
-        stem = self._lane_combo.currentText() or ""
-        strings = 4 if stem == "bass" else 6
-        track = TabTrack(id=f"tab{n}", stem_id=stem, name=f"Tab {n}",
-                         strings=strings, tuning=default_tuning(strings))
+    def _update_header(self):
+        track = self._cur_track()
+        others = [(i, t.name) for i, t in enumerate(self._tracks) if i != self._cur]
+        self._timeline.set_header(track.name if track else None, others)
+
+    def create_tab(self, stem_id: str, name: str, strings: int,
+                   ts_num: int, ts_den: int):
+        """Create a tab from the lane 'Add tab' dialog, select and show it."""
+        existing = {t.id for t in self._tracks}
+        n = 1
+        while f"tab{n}" in existing:
+            n += 1
+        track = TabTrack(id=f"tab{n}", stem_id=stem_id, name=name,
+                         strings=strings, tuning=default_tuning(strings),
+                         def_ts_num=ts_num, def_ts_den=ts_den)
         self._tracks.append(track)
-        self._refresh_track_combo()
         self._cur = len(self._tracks) - 1
-        self._track_combo.setCurrentIndex(self._cur)
         self._show_current()
         self.changed.emit()
 
-    def _on_track_selected(self, idx: int):
+    def _on_tab_switch(self, idx: int):
         if 0 <= idx < len(self._tracks):
             self._cur = idx
             self._show_current()
 
-    def _on_lane_changed(self, _idx: int):
+    def _on_tab_renamed(self, name: str):
         track = self._cur_track()
-        if track:
-            track.stem_id = self._lane_combo.currentText()
+        if track and name:
+            track.name = name
             self.changed.emit()
-
-    def _on_strings_changed(self, text: str):
-        track = self._cur_track()
-        if not track:
-            return
-        track.strings = int(text)
-        track.tuning = default_tuning(track.strings)
-        self._timeline.set_track(track)   # re-measures height
-        self.changed.emit()
-
-    def _apply_ts(self, *_):
-        track = self._cur_track()
-        if track and track.bars:
-            self._timeline.set_time_signature(self._ts_num.value(), int(self._ts_den.currentText()))
+            self._update_header()
 
     def _add_bar(self, *_):
         track = self._cur_track()
         if not track:
-            self._add_track()
-            track = self._cur_track()
+            return   # create a tab first (via a lane's "Tab" button)
         # First/empty bar defaults to 3 s; later bars inherit the previous length.
         default_len = min(3000, self._duration) or 3000
         self._timeline.add_bar(default_len)
