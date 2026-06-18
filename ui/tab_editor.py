@@ -552,12 +552,50 @@ class TabTimeline(TimelineCoords, QWidget):
             n = len(self._track.bars)
             self._select_bar(min(bi, n - 1), mods)  # plain click → select
 
+    def _styled_menu(self) -> QMenu:
+        t = self._theme
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu {{ background: {t.surface}; border: 1px solid {t.border}; "
+            f"border-radius: 8px; padding: 4px; }}"
+            f"QMenu::item {{ padding: 6px 16px; color: {t.ink}; border-radius: 4px; }}"
+            f"QMenu::item:selected {{ background: {t.surface2}; }}"
+            f"QMenu::item:disabled {{ color: {t.ink3}; }}"
+            f"QMenu::indicator {{ width: 14px; }}"
+            f"QMenu::separator {{ height: 1px; background: {t.border}; margin: 4px 6px; }}")
+        return menu
+
+    def _note_hit(self, x: float, y: float):
+        """(bar_index, beat, note) under the cursor, or None."""
+        bi = self._bar_at_x(x)
+        if bi < 0:
+            return None
+        row = round((y - TOP_PAD) / ROW_GAP)
+        if not (0 <= row < self._strings()):
+            return None
+        string = row + 1
+        bar = self._track.bars[bi]
+        for beat in bar.beats:
+            bx = self._x_for_ms(beat_ms(bar, beat))
+            if abs(x - bx) <= 10:
+                for note in beat.notes:
+                    if note.string == string:
+                        return (bi, beat, note)
+        return None
+
     def contextMenuEvent(self, e):
         if not self._track:
             return
-        x = e.pos().x()
+        x, y = e.pos().x(), e.pos().y()
         if x < GUTTER_W:
             return
+
+        # Right-click on a note → technique menu for that note.
+        hit = self._note_hit(x, y)
+        if hit:
+            self._show_note_menu(*hit, e.globalPos())
+            return
+
         bi = self._bar_at_x(x)                       # clicked bar, or -1 if empty
         ms = self._frac(x) * self._duration
 
@@ -573,15 +611,7 @@ class TabTimeline(TimelineCoords, QWidget):
             noun = "this bar"
         has_clip = bool(_BAR_CLIPBOARD)
 
-        t = self._theme
-        menu = QMenu(self)
-        menu.setStyleSheet(
-            f"QMenu {{ background: {t.surface}; border: 1px solid {t.border}; "
-            f"border-radius: 8px; padding: 4px; }}"
-            f"QMenu::item {{ padding: 6px 16px; color: {t.ink}; border-radius: 4px; }}"
-            f"QMenu::item:selected {{ background: {t.surface2}; }}"
-            f"QMenu::item:disabled {{ color: {t.ink3}; }}"
-            f"QMenu::separator {{ height: 1px; background: {t.border}; margin: 4px 6px; }}")
+        menu = self._styled_menu()
 
         a_undo = menu.addAction("Undo", lambda: self.undo_requested.emit())
         a_undo.setEnabled(self._can_undo)
@@ -619,6 +649,26 @@ class TabTimeline(TimelineCoords, QWidget):
         a_del.setEnabled(bool(targets))
 
         menu.exec(e.globalPos())
+
+    _TECH_MENU = [("Hammer-on", "h"), ("Pull-off", "p"), ("Bend", "b"),
+                  ("Slide up", "/"), ("Slide down", "\\"), ("Vibrato", "~"),
+                  ("Palm mute", "PM"), ("Dead note", "x")]
+
+    def _show_note_menu(self, bi: int, beat: Beat, note: Note, gpos):
+        # Put the caret on the clicked note so toggles act on it.
+        ncols = self._ncols(self._track.bars[bi])
+        self._caret = (bi, round(beat.pos * ncols), note.string - 1)
+        self._sel_bars = set()
+        self.update()
+
+        menu = self._styled_menu()
+        for label, tech in self._TECH_MENU:
+            a = menu.addAction(label, lambda _=False, tk=tech: self._toggle_technique(tk))
+            a.setCheckable(True)
+            a.setChecked(tech in note.techniques)
+        menu.addSeparator()
+        menu.addAction("Delete note", self._clear_caret_note)
+        menu.exec(gpos)
 
     def _confirm_delete(self, targets: list[int]):
         if not targets:
@@ -1138,21 +1188,11 @@ class TabEditorPanel(QFrame):
         # signature is edited by clicking it. The current tab's name + switch
         # dropdown live in the gutter to the left of the grid.
 
-        # technique palette
-        pal = QHBoxLayout(); pal.setSpacing(4)
-        pal.addWidget(QLabel("Technique:"))
-        for label, tech in [("H", "h"), ("P", "p"), ("Bend", "b"), ("/", "/"),
-                            ("\\", "\\"), ("~", "~"), ("PM", "PM"), ("×", "x")]:
-            b = QPushButton(label)
-            b.setFixedHeight(24)
-            b.clicked.connect(lambda _=False, tk=tech: self._palette_tech(tk))
-            pal.addWidget(b)
+        # Hint row (techniques are now applied by right-clicking a note).
         hint = QLabel("Click a cell, type fret digits; ↑↓ string, ←→ beat, Del clears.  "
-                      "Click a bar's top handle to select it (Ctrl/Shift for multiple).")
+                      "Right-click a note for techniques; right-click the grid for bar actions.")
         hint.setStyleSheet(f"color: {self._theme.ink3}; font-size: 11px;")
-        pal.addSpacing(10); pal.addWidget(hint)
-        pal.addStretch(1)
-        root.addLayout(pal)
+        root.addWidget(hint)
 
         self._timeline = TabTimeline(self._theme)
         self._timeline.changed.connect(self._commit)
@@ -1227,9 +1267,6 @@ class TabEditorPanel(QFrame):
             track.name = name
             self._update_header()
             self._commit()
-
-    def _palette_tech(self, tech: str):
-        self._timeline._toggle_technique(tech)
 
     def _cur_track(self) -> TabTrack | None:
         return self._tracks[self._cur] if 0 <= self._cur < len(self._tracks) else None

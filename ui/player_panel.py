@@ -1183,10 +1183,6 @@ class PlayerPanel(QWidget):
         self._lanes_scroll.setWidget(self._lanes_container)
         timeline_lay.addWidget(self._lanes_scroll, 1)
 
-        self._waveform_scrollbar = WaveformScrollBar(self._theme)
-        self._waveform_scrollbar.scrolled.connect(self._on_scrollbar_scrolled)
-        timeline_lay.addWidget(self._waveform_scrollbar)
-
         # tab editor — docked below the lanes, shares the timeline zoom/scroll
         from ui.tab_editor import TabEditorPanel
         self._tab_editor = TabEditorPanel(self._theme)
@@ -1194,6 +1190,17 @@ class PlayerPanel(QWidget):
         self._tab_editor.seek_requested.connect(lambda p: self._seek(p, user_initiated=True))
         self._tab_editor.zoom_scroll_changed.connect(self._on_zoom_scroll)
         timeline_lay.addWidget(self._tab_editor)
+
+        # horizontal scrollbar at the very bottom, aligned under the waveform
+        # area only (indented past the lane-head/gutter column).
+        self._waveform_scrollbar = WaveformScrollBar(self._theme)
+        self._waveform_scrollbar.scrolled.connect(self._on_scrollbar_scrolled)
+        sb_row = QHBoxLayout()
+        sb_row.setContentsMargins(0, 0, 0, 0)
+        sb_row.setSpacing(0)
+        sb_row.addSpacing(Ruler.GUTTER_W)          # match the lane-head width
+        sb_row.addWidget(self._waveform_scrollbar, 1)
+        timeline_lay.addLayout(sb_row)
 
         timeline_outer.addWidget(lanes_area, 1)
 
