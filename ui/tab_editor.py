@@ -1082,40 +1082,11 @@ class TabEditorPanel(QFrame):
         root.setContentsMargins(12, 8, 12, 8)
         root.setSpacing(8)
 
-        bar = QHBoxLayout()
-        bar.setSpacing(8)
-
-        # Tabs are created from each lane's "Tab" button; lane + string count +
-        # default time signature are chosen there. The current tab's name (and a
-        # switch dropdown) live in the gutter to the left of the grid. Time
-        # signature is edited per bar by clicking it in the timeline.
-
-        add_bar_btn = QPushButton("Add bar")
-        add_bar_btn.clicked.connect(self._add_bar)
-        bar.addWidget(add_bar_btn)
-
-        end_btn = QPushButton("Set bar end → playhead")
-        end_btn.setToolTip("Anchor the current bar's end to the playback position")
-        end_btn.clicked.connect(self._set_bar_end_playhead)
-        bar.addWidget(end_btn)
-
-        bar.addSpacing(8)
-        for label, tip, fn in [
-            ("Copy", "Copy selected bar(s)  (Ctrl+C)", lambda: self._timeline.copy_selection()),
-            ("Cut", "Cut selected bar(s)  (Ctrl+X)", lambda: self._timeline.cut_selection()),
-            ("Paste", "Add copied bar(s) after the current bar  (Ctrl+V)",
-             lambda: self._timeline.paste(insert=True)),
-            ("Paste into", "Overwrite bars from the caret, keeping their anchors  (Ctrl+Shift+V)",
-             lambda: self._timeline.paste(insert=False)),
-            ("Delete bars", "Delete the selected bar(s)  (Del)",
-             lambda: self._timeline.delete_selection()),
-        ]:
-            b = QPushButton(label); b.setToolTip(tip)
-            b.clicked.connect(lambda _=False, fn=fn: fn())   # absorb clicked(bool)
-            bar.addWidget(b)
-
-        bar.addStretch(1)
-        root.addLayout(bar)
+        # No toolbar buttons: tabs are created from each lane's "Tab" button;
+        # bars are added/copied/pasted/deleted via the grid's right-click menu
+        # (and Ctrl+C/X/V, Del); bar length is set by dragging the handles; time
+        # signature is edited by clicking it. The current tab's name + switch
+        # dropdown live in the gutter to the left of the grid.
 
         # technique palette
         pal = QHBoxLayout(); pal.setSpacing(4)
@@ -1200,19 +1171,6 @@ class TabEditorPanel(QFrame):
             track.name = name
             self.changed.emit()
             self._update_header()
-
-    def _add_bar(self, *_):
-        track = self._cur_track()
-        if not track:
-            return   # create a tab first (via a lane's "Tab" button)
-        # First/empty bar defaults to 3 s; later bars inherit the previous length.
-        default_len = min(3000, self._duration) or 3000
-        self._timeline.add_bar(default_len)
-
-    def _set_bar_end_playhead(self, *_):
-        track = self._cur_track()
-        if track and track.bars:
-            self._timeline.set_caret_bar_end(int(self._timeline._progress * self._duration))
 
     def _palette_tech(self, tech: str):
         self._timeline._toggle_technique(tech)
