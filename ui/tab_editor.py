@@ -514,8 +514,11 @@ class TabTimeline(TimelineCoords, QWidget):
                 self._press = (bi, px, mods, True)
             if dragging:
                 ms = int(self._frac(x) * self._duration)
+                shift = bool(e.modifiers() & Qt.KeyboardModifier.ShiftModifier)
                 if bi >= len(self._track.bars):
                     self._set_bar_end(len(self._track.bars) - 1, ms)   # trailing handle
+                elif shift:
+                    self._shift_bars_from(bi, ms)   # move this bar + all following
                 else:
                     self._set_bar_start(bi, ms)
                 self.update()
@@ -658,6 +661,28 @@ class TabTimeline(TimelineCoords, QWidget):
             bars[bi + 1].start_ms = ms
             if bars[bi + 1].end_ms < ms:
                 bars[bi + 1].end_ms = ms + 50
+
+    def _shift_bars_from(self, bi: int, ms: int):
+        """Shift-drag: move bar *bi* and every following bar rigidly so the start
+        of bar bi lands at *ms*; the preceding bar absorbs the gap. Clamped so the
+        last bar can't go past the song end and bars stay ordered."""
+        bars = self._track.bars
+        delta = ms - bars[bi].start_ms
+        # left limit: bar bi can't cross into the previous bar (keep its ≥50 ms),
+        # and the first bar can't go before 0.
+        lo_start = (bars[bi - 1].start_ms + 50) if bi > 0 else 0
+        if bars[bi].start_ms + delta < lo_start:
+            delta = lo_start - bars[bi].start_ms
+        # right limit: the last bar's end can't pass the song duration.
+        if self._duration > 1 and bars[-1].end_ms + delta > self._duration:
+            delta = self._duration - bars[-1].end_ms
+        if delta == 0:
+            return
+        if bi > 0:
+            bars[bi - 1].end_ms += delta          # preceding bar stretches/shrinks
+        for b in bars[bi:]:
+            b.start_ms += delta
+            b.end_ms += delta
 
     # ------------------------------------------------------------- keyboard
     def keyPressEvent(self, e):
