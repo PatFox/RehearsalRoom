@@ -91,7 +91,7 @@ class _ItemListWidget(QWidget):
     label and × button. Holds both files and YouTube URLs in one queue."""
 
     # Leading glyph per item kind (Segoe UI renders both in the BMP)
-    _KIND_ICON = {"file": "♪", "youtube": "▶"}
+    _KIND_ICON = {"file": "♪", "youtube": "▶", "template": "▤"}
 
     def __init__(self, theme, parent=None, max_height: int = 108):
         super().__init__(parent)
@@ -285,6 +285,16 @@ class ImportDialog(QDialog):
         url_row.addWidget(add_btn)
         left_lay.addLayout(url_row)
 
+        # Load a saved template (.rrs) — re-derives the stems and restores tab/loops
+        tmpl_btn = QPushButton("Load template (.rrs)…")
+        tmpl_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        tmpl_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {self._theme.ink2}; "
+            f"border: none; text-align: left; font-size: 12px; padding: 2px 0; }}"
+            f"QPushButton:hover {{ color: {self._theme.accent}; }}")
+        tmpl_btn.clicked.connect(self._add_template)
+        left_lay.addWidget(tmpl_btn)
+
         # Quality — stacked radios under a heading
         quality_lbl = QLabel("Quality")
         quality_lbl.setStyleSheet(
@@ -436,6 +446,18 @@ class ImportDialog(QDialog):
         self._queue.add(url, label, kind="youtube")
         self._url_input.clear()
 
+    def _add_template(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Load template", "", "Rehearsal Room template (*.rrs)")
+        for p in paths:
+            label = os.path.splitext(os.path.basename(p))[0]
+            try:
+                from core.project import read_manifest
+                label = read_manifest(p).title or label
+            except Exception:
+                pass
+            self._queue.add(p, label, kind="template")
+
     # ------------------------------------------------------------------ start
 
     def _on_start(self):
@@ -460,6 +482,11 @@ class ImportDialog(QDialog):
                 jobs.append({
                     "kind": "youtube", "url": key,
                     "model": self._model, "name": "",
+                })
+            elif kind == "template":
+                jobs.append({
+                    "kind": "template", "path": key,
+                    "model": self._model, "name": os.path.basename(key),
                 })
             else:
                 jobs.append({

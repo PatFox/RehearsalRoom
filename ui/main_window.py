@@ -820,10 +820,42 @@ class MainWindow(QMainWindow):
         name = job.get("name", "") or job.get("url", "New track")
         self._sidebar.show_import_progress(name, current, self._job_total)
 
-        if job["kind"] == "youtube":
+        if job["kind"] == "template":
+            self._start_template(job)
+        elif job["kind"] == "youtube":
             self._start_download(job)
         else:
             self._start_separation(job["path"], job)
+
+    def _start_template(self, job: dict):
+        """A .rrs template: re-derive stems from its source URL or embedded
+        original, then restore the template's title/artist/loops/tabs."""
+        from core.project import read_manifest, extract_original
+        from core.tempdirs import make_temp_dir
+        try:
+            m = read_manifest(job["path"])
+        except Exception as exc:
+            self._on_job_error(f"Could not read template:\n\n{exc}", self._gen)
+            return
+        # Carry the template's metadata through to _finalize_import.
+        job = {**job,
+               "tmpl_title": m.title, "tmpl_artist": m.artist,
+               "tmpl_source_url": m.source_url,
+               "tmpl_tabs": [t.to_dict() for t in m.tabs],
+               "tmpl_loops": [lp.to_dict() for lp in m.loops]}
+        if m.title:
+            self._sidebar.set_import_name(m.title, m.artist)
+        if m.source_url:
+            self._start_download({**job, "url": m.source_url})
+        elif m.original:
+            orig = extract_original(job["path"], make_temp_dir("tmpl_"))
+            if not orig:
+                self._on_job_error("Template has no usable original audio.", self._gen)
+                return
+            self._start_separation(str(orig), job)
+        else:
+            self._on_job_error(
+                "Template has no source URL or original audio to separate.", self._gen)
 
     def _start_download(self, job: dict):
         from core.downloader import DownloaderWorker
@@ -912,8 +944,11 @@ class MainWindow(QMainWindow):
             cover = meta.pop("_cover", None)
             name = job.get("name", "")
             fallback_title = os.path.splitext(name)[0] if name else "New Track"
-            title  = meta.get("title")  or fallback_title
-            artist = meta.get("artist") or "Unknown artist"
+            # A template carries authoritative title/artist; otherwise use the
+            # resolved metadata.
+            title  = job.get("tmpl_title")  or meta.get("title")  or fallback_title
+            artist = job.get("tmpl_artist") or meta.get("artist") or "Unknown artist"
+            source_url = job.get("tmpl_source_url") or job.get("url", "")
 
             self._sidebar.update_import_progress(96, "Saving stems package…")
             lib_dir = S.library_path()
@@ -922,12 +957,25 @@ class MainWindow(QMainWindow):
             out_path = _unique_stems_path(lib_dir, safe)
 
             original_path = job.get("audio_path") or job.get("path", "")
+            # A .rrs template's job["path"] is the template, not audio — don't
+            # try to embed it as the original.
+            if job.get("kind") == "template":
+                original_path = job.get("audio_path", "")
             project = save_stems(
                 {k: Path(v) for k, v in stem_paths.items()},
                 out_path, title=title, artist=artist,
-                source_url=job.get("url", ""), cover=cover,
+                source_url=source_url, cover=cover,
                 original_path=Path(original_path) if original_path else None,
             )
+
+            # Restore tab/loops carried by a template.
+            if job.get("tmpl_tabs") or job.get("tmpl_loops"):
+                from core.project import read_manifest, update_manifest, SavedLoop
+                from core.tab import TabTrack
+                man = read_manifest(out_path)
+                man.tabs = [TabTrack.from_dict(d) for d in job.get("tmpl_tabs", [])]
+                man.loops = [SavedLoop.from_dict(d) for d in job.get("tmpl_loops", [])]
+                update_manifest(out_path, man)
 
             new_song = song_from_stems_file(out_path) or {
                 "id": str(out_path),
@@ -1288,6 +1336,8 @@ class MainWindow(QMainWindow):
             self._export_current(song)
         elif mode == "original":
             self._export_original(song)
+        elif mode == "template":
+            self._export_template(song)
         else:
             self._export_all(song)
 
@@ -1366,6 +1416,37 @@ class MainWindow(QMainWindow):
         if dest:
             shutil.copy2(song["stems_path"], dest)
             QMessageBox.information(self, "Exported", f"Saved to {dest}")
+
+    def _export_template(self, song: dict):
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        from core.project import read_manifest, save_template
+        try:
+            m = read_manifest(song["stems_path"])
+        except Exception as exc:
+            QMessageBox.warning(self, "Export", str(exc))
+            return
+        if not m.source_url and not m.original:
+            QMessageBox.information(
+                self, "Export",
+                "This track has no source URL and no embedded original audio, so "
+                "it can't be exported as a re-splittable template.")
+            return
+        note = ("The template stores the tab, loops and metadata. The audio will "
+                "be re-fetched from YouTube on import."
+                if m.source_url else
+                "The template stores the tab, loops, metadata and the original "
+                "audio so it can be re-split on import.")
+        dest, _ = QFileDialog.getSaveFileName(
+            self, "Export template", f"{song['title']}.rrs",
+            "Rehearsal Room template (*.rrs)")
+        if not dest:
+            return
+        try:
+            save_template(song["stems_path"], dest)
+        except Exception as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
+            return
+        QMessageBox.information(self, "Exported", f"Saved to {dest}\n\n{note}")
 
     def _ask_export_format(self) -> str | None:
         """Prompt for an export format; returns the file extension (e.g. '.flac')."""

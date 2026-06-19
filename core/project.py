@@ -314,6 +314,38 @@ def set_original(stems_path: Path, audio_path: Path) -> None:
             tmp_zip.unlink(missing_ok=True)
 
 
+def save_template(stems_path: Path, out_path: Path) -> None:
+    """Write a .rrs template ZIP: the manifest (title/artist/source_url/loops/
+    tabs/stem labels), plus the embedded original audio only when there's no
+    source URL to re-fetch from. The stems' audio is NOT included — they're
+    regenerated on import. Raises if the track can't be re-split (neither a
+    source URL nor an embedded original)."""
+    import os
+    stems_path = Path(stems_path)
+    out_path = Path(out_path)
+    manifest = read_manifest(stems_path)
+    if not manifest.source_url and not manifest.original:
+        raise ValueError(
+            "This track has no source URL and no embedded original audio, so a "
+            "template can't regenerate its stems.")
+    include_original = (not manifest.source_url) and bool(manifest.original)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out_path.with_suffix(".rrs.tmp")
+    try:
+        with zipfile.ZipFile(stems_path, "r") as zin, \
+             zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_STORED) as zout:
+            if include_original:
+                zout.writestr("original.flac", zin.read(manifest.original))
+                manifest.original = "original.flac"
+            else:
+                manifest.original = ""     # URL-based: re-fetched on import
+            zout.writestr("manifest.json", json.dumps(manifest.to_dict(), indent=2))
+        os.replace(tmp, out_path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+
 def extract_original(stems_path: Path, dest_dir: Path) -> Optional[Path]:
     """Extract the embedded original mix to *dest_dir*, or None if absent."""
     stems_path = Path(stems_path)
