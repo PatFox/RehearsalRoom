@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, Signal, Slot, QTimer, QRectF
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFrame, QScrollArea, QSizePolicy, QDialog, QLineEdit, QSlider
+    QFrame, QScrollArea, QSizePolicy, QDialog, QLineEdit, QSlider, QSplitter
 )
 
 from ui.theme import Theme, STEM_IDS, STEM_LABELS
@@ -58,6 +58,7 @@ def _cover_bytes(song: dict):
 
 class Ruler(QWidget):
     seek_requested = Signal(float)  # 0-1
+    reset_heights  = Signal()       # reset all lane heights to equal
 
     GUTTER_W = 244
 
@@ -77,6 +78,22 @@ class Ruler(QWidget):
         self._scroll_frac: float = 0.0
         self.setFixedHeight(34)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        # Reset-heights button, right-aligned within the "STEMS" gutter.
+        self._reset_btn = QPushButton("⇕", self)
+        self._reset_btn.setFixedSize(22, 22)
+        self._reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._reset_btn.setToolTip("Reset stem heights to equal")
+        self._reset_btn.setStyleSheet(
+            "QPushButton { border: none; background: transparent; font-size: 14px; "
+            f"color: {theme.ink3}; border-radius: 4px; padding: 0; }}"
+            f"QPushButton:hover {{ background: {theme.surface3}; color: {theme.ink}; }}")
+        self._reset_btn.clicked.connect(self.reset_heights)
+
+    def resizeEvent(self, e):
+        b = self._reset_btn
+        b.move(self.GUTTER_W - b.width() - 8, (self.height() - b.height()) // 2)
+        super().resizeEvent(e)
 
     def set_duration(self, ms: int):
         self._dur = max(1, ms)
@@ -233,22 +250,24 @@ class MSSButton(QPushButton):
         self._apply()
 
     def _apply(self):
+        # padding:0 is essential — the global QPushButton QSS sets padding that
+        # would otherwise push the single letter outside this 25x25 button.
         if self.isChecked():
             if self._letter == "M":
                 self.setStyleSheet(
                     "background: #FFE9C7; color: #B26B00; border: 1px solid #F2C887; "
-                    "border-radius: 4px; font-size: 11px; font-weight: 700;"
+                    "border-radius: 4px; font-size: 11px; font-weight: 700; padding: 0;"
                 )
             else:
                 self.setStyleSheet(
                     "background: rgba(46,107,255,0.12); color: #2E6BFF; "
                     "border: 1px solid rgba(46,107,255,0.4); border-radius: 4px; "
-                    "font-size: 11px; font-weight: 700;"
+                    "font-size: 11px; font-weight: 700; padding: 0;"
                 )
         else:
             self.setStyleSheet(
                 "background: #F4F4F0; color: #93939C; border: 1px solid transparent; "
-                "border-radius: 4px; font-size: 11px; font-weight: 700;"
+                "border-radius: 4px; font-size: 11px; font-weight: 700; padding: 0;"
             )
 
 
@@ -317,7 +336,10 @@ class StemLane(QFrame):
         self._id = stem_id
         self._color = color
         self._theme = theme
-        self.setFixedHeight(self.LANE_HEIGHT)
+        # LANE_HEIGHT is the *minimum* (enough for the head: name + M/S + fader).
+        # The splitter grows lanes to fill, and lets the user drag dividers.
+        self.setMinimumHeight(self.LANE_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored)
         self.setStyleSheet(f"QFrame {{ border-bottom: 1px solid {theme.border}; background: transparent; }}")
         self._setup_ui(label, color, wavedata)
 
@@ -378,10 +400,12 @@ class StemLane(QFrame):
         top_row.addWidget(self._solo_btn)
         head_lay.addLayout(top_row)
 
-        # fader row
+        # fader row — sits directly under the top row; leftover space goes below
         self._fader = FaderSlider(color)
         self._fader.value_changed.connect(lambda v: self.volume_changed.emit(self._id, v))
+        self._fader.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         head_lay.addWidget(self._fader)
+        head_lay.addStretch(1)
 
         lay.addWidget(head)
 
@@ -1170,18 +1194,18 @@ class PlayerPanel(QWidget):
 
         self._ruler = Ruler(1, self._theme)
         self._ruler.seek_requested.connect(lambda p: self._seek(p, user_initiated=True))
+        self._ruler.reset_heights.connect(self._reset_lane_heights)
         timeline_lay.addWidget(self._ruler)
 
-        self._lanes_scroll = QScrollArea()
-        self._lanes_scroll.setWidgetResizable(True)
-        self._lanes_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._lanes_container = QWidget()
-        self._lanes_lay = QVBoxLayout(self._lanes_container)
-        self._lanes_lay.setContentsMargins(0, 0, 0, 0)
-        self._lanes_lay.setSpacing(0)
-        self._lanes_lay.addStretch()
-        self._lanes_scroll.setWidget(self._lanes_container)
-        timeline_lay.addWidget(self._lanes_scroll, 1)
+        # Lanes live in a vertical splitter: they fill the available height by
+        # default, the dividers between them are draggable to resize (each lane
+        # has a minimum height), and they shrink when the tab editor appears.
+        self._lanes_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._lanes_splitter.setChildrenCollapsible(False)
+        self._lanes_splitter.setHandleWidth(1)
+        self._lanes_splitter.setStyleSheet(
+            f"QSplitter::handle {{ background: {self._theme.border}; }}")
+        timeline_lay.addWidget(self._lanes_splitter, 1)
 
         # tab editor — docked below the lanes, shares the timeline zoom/scroll
         from ui.tab_editor import TabEditorPanel
@@ -1375,17 +1399,17 @@ class PlayerPanel(QWidget):
         lane.zoom_scroll_changed.connect(self._on_zoom_scroll)
         lane.add_tab_requested.connect(self._on_add_tab)
 
+    def _reset_lane_heights(self):
+        n = self._lanes_splitter.count()
+        if n:
+            self._lanes_splitter.setSizes([1_000_000] * n)
+
     def _rebuild_lanes(self, song: dict, waveforms: dict | None = None):
-        # remove old lanes
+        # remove old lanes from the splitter
         for lane in self._lanes.values():
-            self._lanes_lay.removeWidget(lane)
+            lane.setParent(None)
             lane.deleteLater()
         self._lanes.clear()
-        # remove the original-lane spacer from a previous song, if any
-        if getattr(self, "_orig_spacer", None) is not None:
-            self._lanes_lay.removeWidget(self._orig_spacer)
-            self._orig_spacer.deleteLater()
-            self._orig_spacer = None
 
         seed = song.get("seed", 1)
         colors = [self._theme.stem_color(s) for s in STEM_IDS]
@@ -1396,24 +1420,28 @@ class PlayerPanel(QWidget):
             lane = StemLane(sid, slbl, col, wdata, self._theme)
             self._connect_lane(lane)
             lane.label_changed.connect(self._on_stem_label_committed)
-            self._lanes_lay.insertWidget(self._lanes_lay.count() - 1, lane)
+            self._lanes_splitter.addWidget(lane)
             self._lanes[sid] = lane
             self._stem_labels[sid] = slbl
 
-        # Original mix lane — below the stems, slightly separated, black, muted.
+        # Original mix lane — below the stems, black, muted. The splitter handle
+        # above it provides the divider; a thicker top border sets it apart.
         if getattr(self, "_has_original", False):
-            self._orig_spacer = QWidget()
-            self._orig_spacer.setFixedHeight(14)
-            self._orig_spacer.setStyleSheet("background: transparent;")
-            self._lanes_lay.insertWidget(self._lanes_lay.count() - 1, self._orig_spacer)
-
             black = "#111111" if not self._theme.dark else "#E8E8E8"
             wdata = (waveforms or {}).get("original") or gen_waveform(seed, "other", 4000)
             lane = StemLane("original", "Original", black, wdata, self._theme)
+            lane.setStyleSheet(
+                f"QFrame {{ border-top: 2px solid {self._theme.border_strong}; "
+                f"border-bottom: 1px solid {self._theme.border}; background: transparent; }}")
             self._connect_lane(lane)   # no label_changed — 'Original' isn't renamable
-            self._lanes_lay.insertWidget(self._lanes_lay.count() - 1, lane)
+            self._lanes_splitter.addWidget(lane)
             self._lanes["original"] = lane
             lane.reflect_muted(True)
+
+        # Distribute the available height equally so lanes fill the area.
+        n = self._lanes_splitter.count()
+        if n:
+            self._lanes_splitter.setSizes([1_000_000] * n)
 
     # ------------------------------------------------------------------
     # Playback
