@@ -1188,12 +1188,6 @@ class TabEditorPanel(QFrame):
         # signature is edited by clicking it. The current tab's name + switch
         # dropdown live in the gutter to the left of the grid.
 
-        # Hint row (techniques are now applied by right-clicking a note).
-        hint = QLabel("Click a cell, type fret digits; ↑↓ string, ←→ beat, Del clears.  "
-                      "Right-click a note for techniques; right-click the grid for bar actions.")
-        hint.setStyleSheet(f"color: {self._theme.ink3}; font-size: 11px;")
-        root.addWidget(hint)
-
         self._timeline = TabTimeline(self._theme)
         self._timeline.changed.connect(self._commit)
         self._timeline.seek_requested.connect(self.seek_requested)

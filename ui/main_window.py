@@ -1338,6 +1338,8 @@ class MainWindow(QMainWindow):
             self._export_original(song)
         elif mode == "template":
             self._export_template(song)
+        elif mode == "tabs":
+            self._export_tabs(song)
         else:
             self._export_all(song)
 
@@ -1447,6 +1449,57 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Export failed", str(exc))
             return
         QMessageBox.information(self, "Exported", f"Saved to {dest}\n\n{note}")
+
+    def _export_tabs(self, song: dict):
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        from core.project import read_manifest
+        from core import tabexport
+        from ui.tab_export_dialog import TabExportDialog
+        try:
+            tabs = read_manifest(song["stems_path"]).tabs
+        except Exception as exc:
+            QMessageBox.warning(self, "Export tabs", str(exc))
+            return
+        tabs = [t for t in tabs if t.bars]      # only tabs with content
+        if not tabs:
+            QMessageBox.information(
+                self, "Export tabs", "This track has no tab to export yet.")
+            return
+
+        dlg = TabExportDialog(tabs, self._theme, self,
+                              title=song.get("title", ""), artist=song.get("artist", ""))
+        if not dlg.exec():
+            return
+        sel = dlg.selected_tracks()
+        opts = dlg.options()
+        if not sel:
+            return
+        ext = ".txt" if opts.fmt == "txt" else ".pdf"
+
+        def _write(tracks, dest):
+            if opts.fmt == "txt":
+                Path(dest).write_text(tabexport.render_text(tracks, opts), encoding="utf-8")
+            else:
+                tabexport.render_pdf(tracks, opts, dest)
+
+        try:
+            if opts.mode == "separate" and len(sel) > 1:
+                folder = QFileDialog.getExistingDirectory(self, "Choose a folder")
+                if not folder:
+                    return
+                safe = lambda s: "".join(c for c in s if c.isalnum() or c in " _-").strip() or "tab"
+                for t in sel:
+                    _write([t], str(Path(folder) / f"{song['title']} - {safe(t.name)}{ext}"))
+                QMessageBox.information(self, "Exported", f"Saved {len(sel)} files to {folder}")
+            else:
+                dest, _ = QFileDialog.getSaveFileName(
+                    self, "Export tabs", f"{song['title']} (tab){ext}", f"*{ext}")
+                if not dest:
+                    return
+                _write(sel, dest)
+                QMessageBox.information(self, "Exported", f"Saved to {dest}")
+        except Exception as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
 
     def _ask_export_format(self) -> str | None:
         """Prompt for an export format; returns the file extension (e.g. '.flac')."""

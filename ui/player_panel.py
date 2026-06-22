@@ -1714,7 +1714,8 @@ class PlayerPanel(QWidget):
         for label, mode in [("All (.stems package)", "all"),
                             ("Current mix…", "current"),
                             ("Original audio…", "original"),
-                            ("As template (.rrs)…", "template")]:
+                            ("As template (.rrs)…", "template"),
+                            ("Tabs to text/PDF…", "tabs")]:
             act = QAction(label, self)
             act.triggered.connect(lambda _=False, m=mode: self.export_clicked.emit(self._song, m))
             menu.addAction(act)
