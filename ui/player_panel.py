@@ -475,15 +475,61 @@ class TransportBar(QFrame):
         self._current_speed = 1.0
         self._current_pitch = 0
         self.setFixedHeight(88)
+        # Scope to TransportBar so the top border doesn't cascade onto child QFrames.
         self.setStyleSheet(
-            f"QFrame {{ background: {theme.surface}; border-top: 1px solid {theme.border}; }}"
+            f"TransportBar {{ background: {theme.surface}; border-top: 1px solid {theme.border}; }}"
         )
         self._setup_ui()
 
     def _setup_ui(self):
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(24, 0, 24, 0)
+        # left margin 0 so the master column lines up with the stem lane heads
+        lay.setContentsMargins(0, 0, 24, 0)
         lay.setSpacing(18)
+
+        # --- master fader (left column, aligned with the stem faders) ---
+        master_w = QWidget()
+        master_w.setFixedWidth(244)          # matches StemLane head width
+        mg = QVBoxLayout(master_w)
+        mg.setContentsMargins(14, 6, 14, 6)  # 14px left = stem-fader left edge
+        mg.setSpacing(5)
+        ml = QLabel("Master")
+        ml.setStyleSheet("font-size: 14px; font-weight: 600; background: transparent; border: none;")
+        self._master_slider = QSlider(Qt.Orientation.Horizontal)
+        self._master_slider.setRange(0, 150)
+        self._master_slider.setValue(100)
+        self._master_slider.setStyleSheet(f"""
+            QSlider::groove:horizontal {{
+                height: 5px; background: {self._theme.surface3}; border-radius: 3px;
+            }}
+            QSlider::handle:horizontal {{
+                width: 15px; height: 15px; background: {self._theme.surface};
+                border: 2px solid {self._theme.ink}; border-radius: 8px; margin: -5px 0;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: {self._theme.ink}; border-radius: 3px;
+            }}
+        """)
+        self._master_val_lbl = QLabel("100")
+        self._master_val_lbl.setStyleSheet("font-family: 'Consolas', monospace; font-size: 12px;")
+        self._master_val_lbl.setFixedWidth(30)
+        self._master_val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._master_slider.valueChanged.connect(lambda v: (
+            self._master_val_lbl.setText(str(v)),
+            self.master_changed.emit(v)
+        ))
+        _reset_master = lambda e: self._master_slider.setValue(100)
+        self._master_slider.mouseDoubleClickEvent = _reset_master
+        self._master_val_lbl.mouseDoubleClickEvent = _reset_master
+        m_row = QHBoxLayout()
+        m_row.setSpacing(8)
+        m_row.addWidget(self._master_slider, 1)
+        m_row.addWidget(self._master_val_lbl)
+        mg.addStretch()
+        mg.addWidget(ml)
+        mg.addLayout(m_row)
+        mg.addStretch()
+        lay.addWidget(master_w)
 
         # time display
         self._time_lbl = QLabel("0:00.00")
@@ -633,49 +679,6 @@ class TransportBar(QFrame):
         lay.addLayout(pitch_group)
 
         lay.addStretch()
-
-        # master fader
-        master_group = QHBoxLayout()
-        master_group.setSpacing(10)
-        ml = QLabel("MASTER")
-        ml.setStyleSheet(
-            f"font-size: 10px; font-weight: 600; letter-spacing: 0.1em; color: {self._theme.ink3};"
-        )
-        master_group.addWidget(ml)
-
-        vol_icon = QLabel("🔊")
-        vol_icon.setStyleSheet(f"color: {self._theme.ink2}; font-size: 14px;")
-        master_group.addWidget(vol_icon)
-
-        self._master_slider = QSlider(Qt.Orientation.Horizontal)
-        self._master_slider.setRange(0, 150)
-        self._master_slider.setValue(100)
-        self._master_slider.setFixedWidth(130)
-        self._master_slider.setStyleSheet(f"""
-            QSlider::groove:horizontal {{
-                height: 5px; background: {self._theme.surface3}; border-radius: 3px;
-            }}
-            QSlider::handle:horizontal {{
-                width: 15px; height: 15px; background: {self._theme.surface};
-                border: 2px solid {self._theme.ink}; border-radius: 8px; margin: -5px 0;
-            }}
-            QSlider::sub-page:horizontal {{
-                background: {self._theme.ink}; border-radius: 3px;
-            }}
-        """)
-        self._master_val_lbl = QLabel("100")
-        self._master_val_lbl.setStyleSheet("font-family: 'Consolas', monospace; font-size: 12px;")
-        self._master_val_lbl.setFixedWidth(30)
-        self._master_slider.valueChanged.connect(lambda v: (
-            self._master_val_lbl.setText(str(v)),
-            self.master_changed.emit(v)
-        ))
-        _reset_master = lambda e: self._master_slider.setValue(100)
-        self._master_slider.mouseDoubleClickEvent = _reset_master
-        self._master_val_lbl.mouseDoubleClickEvent = _reset_master
-        master_group.addWidget(self._master_slider)
-        master_group.addWidget(self._master_val_lbl)
-        lay.addLayout(master_group)
 
     def _tbtn(self, icon: str, tip: str) -> QPushButton:
         btn = QPushButton(icon)

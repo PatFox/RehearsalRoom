@@ -692,6 +692,7 @@ class MainWindow(QMainWindow):
     def _go_library(self):
         self._stack.setCurrentIndex(0)
         self._topbar.show()
+        self._sidebar.show()
         # Always push the current song list and last-viewed times so the panel
         # is never stale after a new import or a return from the player view.
         self._library.set_songs(self._songs)
@@ -741,6 +742,7 @@ class MainWindow(QMainWindow):
         self._player.load_song(song, audio_player)
         self._stack.setCurrentIndex(1)
         self._topbar.hide()
+        self._sidebar.hide()   # track view spans the full window width
         self._player.setFocus()
 
     def _on_nav(self, key: str):
