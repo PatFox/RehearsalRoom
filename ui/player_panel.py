@@ -691,7 +691,7 @@ class TransportBar(QFrame):
         hover = self._theme.border if darker else self._theme.surface3
         btn.setStyleSheet(
             f"QPushButton {{ background: {bg}; border: none; border-radius: 4px; "
-            f"font-size: 18px; color: {self._theme.ink2}; outline: none; padding: 0; }}"
+            f"font-size: 26px; color: {self._theme.ink2}; outline: none; padding: 0; }}"
             f"QPushButton:hover {{ background: {hover}; color: {self._theme.ink}; }}"
             f"QPushButton:checked {{ background: {self._theme.accent_soft()}; color: {self._theme.accent}; }}"
         )
