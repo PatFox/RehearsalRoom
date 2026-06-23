@@ -60,8 +60,12 @@ def _cover_bytes(song: dict):
 class Ruler(QWidget):
     seek_requested = Signal(float)  # 0-1
     reset_heights  = Signal()       # reset all lane heights to equal
+    zoom_changed   = Signal(float, float)   # zoom, scroll_frac
 
     GUTTER_W = 244
+    _ZOOM_STEP = 0.25          # 25% increments: 100%, 125%, 150%, …
+    _ZOOM_MIN  = 1.0
+    _ZOOM_MAX  = 32.0
 
     # Candidate tick intervals in ms, from coarse to fine
     _INTERVALS = [
@@ -81,19 +85,77 @@ class Ruler(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         # Reset-heights button, right-aligned within the "STEMS" gutter.
-        self._reset_btn = QPushButton("⇕", self)
+        # Greyed out unless the stem heights are unequal.
+        self._reset_btn = QPushButton("=", self)
         self._reset_btn.setFixedSize(22, 22)
         self._reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._reset_btn.setToolTip("Reset stem heights to equal")
         self._reset_btn.setStyleSheet(
-            "QPushButton { border: none; background: transparent; font-size: 14px; "
-            f"color: {theme.ink3}; border-radius: 4px; padding: 0; }}"
-            f"QPushButton:hover {{ background: {theme.surface3}; color: {theme.ink}; }}")
+            f"QPushButton {{ border: none; background: {theme.surface2}; font-size: 15px; "
+            f"font-weight: 600; color: {theme.ink2}; border-radius: 4px; padding: 0 0 2px 0; }}"
+            f"QPushButton:hover {{ background: {theme.surface3}; color: {theme.ink}; }}"
+            f"QPushButton:disabled {{ background: {theme.surface2}; color: {theme.border_strong}; }}")
+        self._reset_btn.setEnabled(False)
         self._reset_btn.clicked.connect(self.reset_heights)
 
+        # Zoom −/+ with a numeric box between, left of the reset button.
+        _zbtn = (
+            f"QPushButton {{ border: none; background: {theme.surface2}; font-size: 16px; "
+            f"font-weight: 600; color: {theme.ink2}; border-radius: 4px; padding: 0 0 3px 0; }}"
+            f"QPushButton:hover {{ background: {theme.surface3}; color: {theme.ink}; }}"
+            f"QPushButton:disabled {{ background: {theme.surface2}; color: {theme.border_strong}; }}")
+        self._zoom_out = QPushButton("−", self)
+        self._zoom_out.setFixedSize(20, 22)
+        self._zoom_out.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._zoom_out.setToolTip("Zoom out")
+        self._zoom_out.setStyleSheet(_zbtn)
+        self._zoom_out.clicked.connect(lambda: self._step_zoom(-1))
+
+        self._zoom_lbl = QLabel("100%", self)
+        self._zoom_lbl.setFixedSize(48, 22)
+        self._zoom_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._zoom_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._zoom_lbl.setToolTip("Double-click to fit to screen")
+        self._zoom_lbl.setStyleSheet(
+            f"background: {theme.surface}; border: 1px solid {theme.border}; "
+            f"border-radius: 4px; font-family: 'Consolas', monospace; font-size: 11px; "
+            f"color: {theme.ink};")
+        self._zoom_lbl.mouseDoubleClickEvent = lambda e: self.zoom_changed.emit(1.0, 0.0)
+
+        self._zoom_in = QPushButton("+", self)
+        self._zoom_in.setFixedSize(20, 22)
+        self._zoom_in.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._zoom_in.setToolTip("Zoom in")
+        self._zoom_in.setStyleSheet(_zbtn)
+        self._zoom_in.clicked.connect(lambda: self._step_zoom(+1))
+
+    def _step_zoom(self, direction: int):
+        import math
+        units = self._zoom / self._ZOOM_STEP
+        # Step to the next/previous 25% grid mark (snapping any off-grid zoom).
+        if direction > 0:
+            new_zoom = (math.floor(units + 1e-6) + 1) * self._ZOOM_STEP
+        else:
+            new_zoom = (math.ceil(units - 1e-6) - 1) * self._ZOOM_STEP
+        new_zoom = max(self._ZOOM_MIN, min(self._ZOOM_MAX, new_zoom))
+        # Keep the centre of the visible window fixed.
+        vis = 1.0 / self._zoom
+        center = self._scroll_frac * (1.0 - vis) + vis / 2
+        nv = 1.0 / new_zoom
+        ns = 0.0 if new_zoom <= 1.0 else max(0.0, min(1.0, (center - nv / 2) / (1.0 - nv)))
+        self.zoom_changed.emit(new_zoom, ns)
+
+    def set_reset_enabled(self, on: bool):
+        self._reset_btn.setEnabled(on)
+
     def resizeEvent(self, e):
+        cy = (self.height() - 22) // 2
         b = self._reset_btn
         b.move(self.GUTTER_W - b.width() - 8, (self.height() - b.height()) // 2)
+        zi_x = b.x() - 8 - self._zoom_in.width()
+        self._zoom_in.move(zi_x, cy)
+        self._zoom_lbl.move(zi_x - 2 - self._zoom_lbl.width(), cy)
+        self._zoom_out.move(self._zoom_lbl.x() - 2 - self._zoom_out.width(), cy)
         super().resizeEvent(e)
 
     def set_duration(self, ms: int):
@@ -103,6 +165,9 @@ class Ruler(QWidget):
     def set_zoom_scroll(self, zoom: float, scroll_frac: float):
         self._zoom = max(1.0, zoom)
         self._scroll_frac = scroll_frac
+        self._zoom_lbl.setText(f"{round(self._zoom * 100)}%")
+        self._zoom_out.setEnabled(self._zoom > self._ZOOM_MIN + 1e-6)
+        self._zoom_in.setEnabled(self._zoom < self._ZOOM_MAX - 1e-6)
         self.update()
 
     def _visible_range_ms(self) -> tuple[float, float]:
@@ -671,25 +736,11 @@ class TransportBar(QFrame):
         self._speed_up_btn.setEnabled(False)   # start at 1.0× so + is disabled
         self._speed_up_btn.clicked.connect(self._speed_up)
 
-        # Animated processing indicator
-        self._speed_spinner = QLabel()
-        self._speed_spinner.setStyleSheet(
-            f"font-size: 12px; color: {self._theme.accent}; font-family: monospace;"
-        )
-        self._speed_spinner.setFixedWidth(14)
-        self._speed_busy_timer = QTimer()
-        self._speed_busy_timer.setInterval(80)
-        self._speed_busy_timer.timeout.connect(self._tick_spinner)
-        self._spinner_frames = "⣾⣽⣻⢿⡿⣟⣯⣷"
-        self._spinner_idx = 0
-        self._speed_spinner.hide()
-
         speed_row = QHBoxLayout()
         speed_row.setSpacing(5)
         speed_row.addWidget(self._speed_down_btn)
         speed_row.addWidget(self._speed_val_lbl)
         speed_row.addWidget(self._speed_up_btn)
-        speed_row.addWidget(self._speed_spinner)
         lay.addLayout(self._labeled("SPEED", speed_row))
 
         # --- Pitch (semitones, independent of speed) ---
@@ -712,13 +763,13 @@ class TransportBar(QFrame):
         # waveforms — at any window width.
         lay.addStretch(1)
 
-    def _tbtn_qss(self, darker: bool = False, color: str = "") -> str:
+    def _tbtn_qss(self, darker: bool = False, color: str = "", pad_bottom: int = 0) -> str:
         bg = self._theme.surface3 if darker else self._theme.surface2
         hover = self._theme.border if darker else self._theme.surface3
         col = color or self._theme.ink2
         return (
             f"QPushButton {{ background: {bg}; border: none; border-radius: 4px; "
-            f"font-size: 22px; color: {col}; outline: none; padding: 0; }}"
+            f"font-size: 22px; color: {col}; outline: none; padding: 0 0 {pad_bottom}px 0; }}"
             f"QPushButton:hover {{ background: {hover}; color: {self._theme.ink}; }}"
             f"QPushButton:checked {{ background: {self._theme.accent_soft()}; color: {self._theme.accent}; }}"
             f"QPushButton:disabled {{ color: {self._theme.ink3}; }}"
@@ -730,12 +781,15 @@ class TransportBar(QFrame):
         btn.setFixedSize(width, 42)
         btn.setToolTip(tip)
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        btn.setStyleSheet(self._tbtn_qss(darker))
         if icon_kind:
+            # Painted icons are already centred in their pixmaps — no padding.
+            btn.setStyleSheet(self._tbtn_qss(darker))
             ico, sz = _transport_icon(icon_kind, self._theme.ink2)
             btn.setIcon(ico)
             btn.setIconSize(sz)
         else:
+            # Text glyphs (−/+) render slightly low; nudge up with bottom padding.
+            btn.setStyleSheet(self._tbtn_qss(darker, pad_bottom=5))
             btn.setText(icon)
         return btn
 
@@ -806,28 +860,12 @@ class TransportBar(QFrame):
         self._pitch_down_btn.setEnabled(semitones > -12)
         self._pitch_up_btn.setEnabled(semitones < 12)
 
-    def _tick_spinner(self):
-        self._spinner_idx = (self._spinner_idx + 1) % len(self._spinner_frames)
-        self._speed_spinner.setText(self._spinner_frames[self._spinner_idx])
-
     def set_speed(self, rate: float):
         """Update the speed display to match a given rate without re-emitting."""
         rate = max(0.25, min(4.0, rate))
         self._speed_val_lbl.setText(f"{int(round(rate * 100))}%")
         self._speed_down_btn.setEnabled(rate > 0.25)
         self._speed_up_btn.setEnabled(rate < 4.0)
-
-    @Slot()
-    def show_speed_busy(self):
-        self._spinner_idx = 0
-        self._speed_spinner.setText(self._spinner_frames[0])
-        self._speed_spinner.show()
-        self._speed_busy_timer.start()
-
-    @Slot()
-    def hide_speed_busy(self):
-        self._speed_busy_timer.stop()
-        self._speed_spinner.hide()
 
     def set_loop_state(self, state: int):
         """0 = no loop, 1 = start set, 2 = loop active."""
@@ -1274,6 +1312,7 @@ class PlayerPanel(QWidget):
         self._ruler = Ruler(1, self._theme)
         self._ruler.seek_requested.connect(lambda p: self._seek(p, user_initiated=True))
         self._ruler.reset_heights.connect(self._reset_lane_heights)
+        self._ruler.zoom_changed.connect(self._on_zoom_scroll)
         timeline_lay.addWidget(self._ruler)
 
         # Lanes live in a vertical splitter: they fill the available height by
@@ -1284,6 +1323,7 @@ class PlayerPanel(QWidget):
         self._lanes_splitter.setHandleWidth(1)
         self._lanes_splitter.setStyleSheet(
             f"QSplitter::handle {{ background: {self._theme.border}; }}")
+        self._lanes_splitter.splitterMoved.connect(self._on_splitter_moved)
         timeline_lay.addWidget(self._lanes_splitter, 1)
 
         # tab editor — docked below the lanes, shares the timeline zoom/scroll
@@ -1393,12 +1433,6 @@ class PlayerPanel(QWidget):
         """Load a song dict (from library) into the player panel."""
         self._song = song
         self._player = player
-        if player is not None:
-            from PySide6.QtCore import QMetaObject, Qt
-            player.on_stretch_started = lambda: QMetaObject.invokeMethod(
-                self._transport, "show_speed_busy", Qt.ConnectionType.QueuedConnection)
-            player.on_stretch_done = lambda: QMetaObject.invokeMethod(
-                self._transport, "hide_speed_busy", Qt.ConnectionType.QueuedConnection)
         # `or` (not .get default) so a manifest storing 0 can't divide-by-zero in the tick loop
         self._duration = song.get("durationMs") or 180_000
         self._time_ms = 0.0
@@ -1483,6 +1517,13 @@ class PlayerPanel(QWidget):
         n = self._lanes_splitter.count()
         if n:
             self._lanes_splitter.setSizes([1_000_000] * n)
+        self._ruler.set_reset_enabled(False)
+
+    def _on_splitter_moved(self, *_):
+        # Enable the reset button only when the lane heights aren't equal.
+        sizes = self._lanes_splitter.sizes()
+        unequal = bool(sizes) and (max(sizes) - min(sizes) > 2)
+        self._ruler.set_reset_enabled(unequal)
 
     def _rebuild_lanes(self, song: dict, waveforms: dict | None = None):
         # remove old lanes from the splitter
@@ -1522,6 +1563,7 @@ class PlayerPanel(QWidget):
         n = self._lanes_splitter.count()
         if n:
             self._lanes_splitter.setSizes([1_000_000] * n)
+        self._ruler.set_reset_enabled(False)   # heights start equal
 
     # ------------------------------------------------------------------
     # Playback
