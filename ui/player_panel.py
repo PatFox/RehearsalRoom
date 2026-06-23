@@ -617,44 +617,16 @@ class TransportBar(QFrame):
         self._save_loop_btn.hide()   # only visible when loop is active
         ctrl.addWidget(self._save_loop_btn)
 
-        lay.addLayout(ctrl)
+        # Transport buttons sit under a blank label so their row aligns with the
+        # SPEED/PITCH button rows (which carry a centred label above them).
+        lay.addLayout(self._labeled("", ctrl))
 
-        # --- Speed buttons ---
-        speed_group = QVBoxLayout()
-        speed_group.setSpacing(3)
-        speed_lbl = QLabel("SPEED")
-        speed_lbl.setStyleSheet(
-            f"font-size: 10px; font-weight: 600; letter-spacing: 0.1em; color: {self._theme.ink3};"
-        )
-        speed_row = QHBoxLayout()
-        speed_row.setSpacing(4)
-
-        btn_style = (
-            f"QPushButton {{ background: {self._theme.surface2}; border: 1px solid {self._theme.border}; "
-            f"border-radius: 14px; font-size: 16px; font-weight: 600; color: {self._theme.ink}; }}"
-            f"QPushButton:hover {{ background: {self._theme.surface3}; }}"
-            f"QPushButton:disabled {{ color: {self._theme.ink3}; background: {self._theme.surface}; }}"
-        )
-        self._speed_down_btn = QPushButton("−")
-        self._speed_down_btn.setFixedSize(28, 28)
-        self._speed_down_btn.setToolTip("Slower (min 0.5×)")
-        self._speed_down_btn.setStyleSheet(btn_style)
+        # --- Speed (− value + ), buttons styled like the transport ---
+        self._speed_down_btn = self._tbtn("−", "Slower (min 0.5×)")
         self._speed_down_btn.clicked.connect(self._speed_down)
-
-        self._speed_val_lbl = QLabel("1.0×")
-        self._speed_val_lbl.setStyleSheet(
-            "font-family: 'Consolas', monospace; font-size: 13px; font-weight: 600;"
-        )
-        self._speed_val_lbl.setFixedWidth(38)
-        self._speed_val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._speed_val_lbl.setToolTip("Double-click to reset to 1.0×")
-        self._speed_val_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._speed_val_lbl = self._value_box("1.0×", "Double-click to reset to 1.0×")
         self._speed_val_lbl.mouseDoubleClickEvent = lambda e: self._set_speed(1.0)
-
-        self._speed_up_btn = QPushButton("+")
-        self._speed_up_btn.setFixedSize(28, 28)
-        self._speed_up_btn.setToolTip("Faster (max 1.0×)")
-        self._speed_up_btn.setStyleSheet(btn_style)
+        self._speed_up_btn = self._tbtn("+", "Faster (max 1.0×)")
         self._speed_up_btn.setEnabled(False)   # start at 1.0× so + is disabled
         self._speed_up_btn.clicked.connect(self._speed_up)
 
@@ -671,52 +643,28 @@ class TransportBar(QFrame):
         self._spinner_idx = 0
         self._speed_spinner.hide()
 
+        speed_row = QHBoxLayout()
+        speed_row.setSpacing(5)
         speed_row.addWidget(self._speed_down_btn)
         speed_row.addWidget(self._speed_val_lbl)
         speed_row.addWidget(self._speed_up_btn)
         speed_row.addWidget(self._speed_spinner)
-        speed_group.addWidget(speed_lbl)
-        speed_group.addLayout(speed_row)
-        lay.addLayout(speed_group)
+        lay.addLayout(self._labeled("SPEED", speed_row))
 
-        # --- Pitch buttons (semitones, independent of speed) ---
-        pitch_group = QVBoxLayout()
-        pitch_group.setSpacing(3)
-        pitch_lbl = QLabel("PITCH")
-        pitch_lbl.setStyleSheet(
-            f"font-size: 10px; font-weight: 600; letter-spacing: 0.1em; color: {self._theme.ink3};"
-        )
-        pitch_row = QHBoxLayout()
-        pitch_row.setSpacing(4)
-
-        self._pitch_down_btn = QPushButton("−")
-        self._pitch_down_btn.setFixedSize(28, 28)
-        self._pitch_down_btn.setToolTip("Down a semitone (min −12)")
-        self._pitch_down_btn.setStyleSheet(btn_style)
+        # --- Pitch (semitones, independent of speed) ---
+        self._pitch_down_btn = self._tbtn("−", "Down a semitone (min −12)")
         self._pitch_down_btn.clicked.connect(self._pitch_down)
-
-        self._pitch_val_lbl = QLabel("0")
-        self._pitch_val_lbl.setStyleSheet(
-            "font-family: 'Consolas', monospace; font-size: 13px; font-weight: 600;"
-        )
-        self._pitch_val_lbl.setFixedWidth(38)
-        self._pitch_val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._pitch_val_lbl.setToolTip("Double-click to reset to 0")
-        self._pitch_val_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pitch_val_lbl = self._value_box("0", "Double-click to reset to 0")
         self._pitch_val_lbl.mouseDoubleClickEvent = lambda e: self._set_pitch(0)
-
-        self._pitch_up_btn = QPushButton("+")
-        self._pitch_up_btn.setFixedSize(28, 28)
-        self._pitch_up_btn.setToolTip("Up a semitone (max +12)")
-        self._pitch_up_btn.setStyleSheet(btn_style)
+        self._pitch_up_btn = self._tbtn("+", "Up a semitone (max +12)")
         self._pitch_up_btn.clicked.connect(self._pitch_up)
 
+        pitch_row = QHBoxLayout()
+        pitch_row.setSpacing(5)
         pitch_row.addWidget(self._pitch_down_btn)
         pitch_row.addWidget(self._pitch_val_lbl)
         pitch_row.addWidget(self._pitch_up_btn)
-        pitch_group.addWidget(pitch_lbl)
-        pitch_group.addLayout(pitch_row)
-        lay.addLayout(pitch_group)
+        lay.addLayout(self._labeled("PITCH", pitch_row))
 
         lay.addStretch()
 
@@ -733,6 +681,7 @@ class TransportBar(QFrame):
             f"font-size: 22px; color: {self._theme.ink2}; outline: none; padding: 0; }}"
             f"QPushButton:hover {{ background: {hover}; color: {self._theme.ink}; }}"
             f"QPushButton:checked {{ background: {self._theme.accent_soft()}; color: {self._theme.accent}; }}"
+            f"QPushButton:disabled {{ color: {self._theme.ink3}; }}"
         )
         if icon_kind:
             ico, sz = _transport_icon(icon_kind, self._theme.ink2)
@@ -741,6 +690,35 @@ class TransportBar(QFrame):
         else:
             btn.setText(icon)
         return btn
+
+    def _labeled(self, text: str, row: QHBoxLayout) -> QVBoxLayout:
+        """A control group: a centred caption above a row of controls. An empty
+        caption still reserves height so rows line up across groups."""
+        box = QVBoxLayout()
+        box.setSpacing(3)
+        lbl = QLabel(text)
+        lbl.setFixedHeight(13)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setStyleSheet(
+            f"font-size: 10px; font-weight: 600; letter-spacing: 0.1em; color: {self._theme.ink3};")
+        box.addWidget(lbl)
+        box.addLayout(row)
+        return box
+
+    def _value_box(self, text: str, tip: str = "") -> QLabel:
+        """A read-out box that matches the transport button height (lighter grey)."""
+        lbl = QLabel(text)
+        lbl.setFixedHeight(42)
+        lbl.setMinimumWidth(50)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        if tip:
+            lbl.setToolTip(tip)
+        lbl.setStyleSheet(
+            f"background: {self._theme.surface}; border: 1px solid {self._theme.border}; "
+            f"border-radius: 4px; font-family: 'Consolas', monospace; font-size: 14px; "
+            f"font-weight: 600; color: {self._theme.ink}; padding: 0 8px;")
+        return lbl
 
     def _speed_down(self):
         self._set_speed(round(self._current_speed - 0.1, 1))
