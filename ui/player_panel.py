@@ -460,8 +460,9 @@ class StemLane(QFrame):
 
 class TransportBar(QFrame):
     play_pause     = Signal()
-    stop           = Signal()
-    restart        = Signal()
+    restart        = Signal()      # jump to start
+    skip_back      = Signal()      # −5 s
+    skip_forward   = Signal()      # +5 s
     loop_clicked   = Signal()
     save_loop      = Signal()   # emitted when user clicks the save-loop button
     master_changed = Signal(int)
@@ -550,29 +551,30 @@ class TransportBar(QFrame):
         ctrl = QHBoxLayout()
         ctrl.setSpacing(6)
 
-        restart_btn = self._tbtn("⏮", "Restart")
-        restart_btn.clicked.connect(self.restart)
-        ctrl.addWidget(restart_btn)
+        # Geometric (non-emoji) glyphs so Windows renders them monochrome
+        # rather than as coloured/framed emoji.
+        start_btn = self._tbtn("|◄", "Jump to start")
+        start_btn.clicked.connect(self.restart)
+        ctrl.addWidget(start_btn)
 
-        self._play_btn = QPushButton("▶")
-        self._play_btn.setFixedSize(56, 56)
-        self._play_btn.setStyleSheet(
-            f"QPushButton {{ background: {self._theme.ink}; color: {self._theme.ink_inv}; "
-            f"border-radius: 28px; font-size: 18px; }}"
-            f"QPushButton:hover {{ background: {self._theme.ink2}; }}"
-        )
+        back_btn = self._tbtn("◄◄", "Skip back 5 s")
+        back_btn.clicked.connect(self.skip_back)
+        ctrl.addWidget(back_btn)
+
+        # Play / pause — twice as wide as tall, slightly darker grey
+        self._play_btn = self._tbtn("►", "Play / pause", width=84, darker=True)
         self._play_btn.clicked.connect(self.play_pause)
         ctrl.addWidget(self._play_btn)
 
-        stop_btn = self._tbtn("⏹", "Stop")
-        stop_btn.clicked.connect(self.stop)
-        ctrl.addWidget(stop_btn)
+        fwd_btn = self._tbtn("►►", "Skip forward 5 s")
+        fwd_btn.clicked.connect(self.skip_forward)
+        ctrl.addWidget(fwd_btn)
 
         self._loop_btn = self._tbtn("⊙", "Click to set loop start (L)")
         self._loop_btn.clicked.connect(self.loop_clicked)
         ctrl.addWidget(self._loop_btn)
 
-        self._save_loop_btn = self._tbtn("💾", "Save current loop")
+        self._save_loop_btn = self._tbtn("★", "Save current loop")
         self._save_loop_btn.clicked.connect(self.save_loop)
         self._save_loop_btn.hide()   # only visible when loop is active
         ctrl.addWidget(self._save_loop_btn)
@@ -680,13 +682,17 @@ class TransportBar(QFrame):
 
         lay.addStretch()
 
-    def _tbtn(self, icon: str, tip: str) -> QPushButton:
+    def _tbtn(self, icon: str, tip: str, width: int = 42, darker: bool = False) -> QPushButton:
         btn = QPushButton(icon)
-        btn.setFixedSize(42, 42)
+        btn.setFixedSize(width, 42)
         btn.setToolTip(tip)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        bg = self._theme.surface3 if darker else self._theme.surface2
+        hover = self._theme.border if darker else self._theme.surface3
         btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; border-radius: 21px; font-size: 16px; color: {self._theme.ink2}; }}"
-            f"QPushButton:hover {{ background: {self._theme.surface2}; color: {self._theme.ink}; }}"
+            f"QPushButton {{ background: {bg}; border: none; border-radius: 4px; "
+            f"font-size: 18px; color: {self._theme.ink2}; outline: none; padding: 0; }}"
+            f"QPushButton:hover {{ background: {hover}; color: {self._theme.ink}; }}"
             f"QPushButton:checked {{ background: {self._theme.accent_soft()}; color: {self._theme.accent}; }}"
         )
         return btn
@@ -771,7 +777,7 @@ class TransportBar(QFrame):
         self._save_loop_btn.setVisible(state == 2)
 
     def set_playing(self, playing: bool):
-        self._play_btn.setText("⏸" if playing else "▶")
+        self._play_btn.setText("▮▮" if playing else "►")
 
     def set_time(self, ms: int):
         self._time_lbl.setText(_fmt_ms(ms))
@@ -1242,8 +1248,9 @@ class PlayerPanel(QWidget):
         # transport
         self._transport = TransportBar(1, self._theme)
         self._transport.play_pause.connect(self._toggle_play)
-        self._transport.stop.connect(self._stop)
         self._transport.restart.connect(lambda: self._seek(0.0))
+        self._transport.skip_back.connect(lambda: self._skip(-5000))
+        self._transport.skip_forward.connect(lambda: self._skip(5000))
         self._transport.loop_clicked.connect(self._on_loop_button)
         self._transport.save_loop.connect(self._on_save_loop)
         self._transport.master_changed.connect(self._on_master_changed)
@@ -1793,11 +1800,14 @@ class PlayerPanel(QWidget):
         elif e.key() == Qt.Key.Key_L:
             self._on_loop_button()
         elif e.key() == Qt.Key.Key_Left:
-            self._seek(max(0.0, (self._time_ms - 5000) / self._duration))
+            self._skip(-5000)
         elif e.key() == Qt.Key.Key_Right:
-            self._seek(min(1.0, (self._time_ms + 5000) / self._duration))
+            self._skip(5000)
         else:
             super().keyPressEvent(e)
+
+    def _skip(self, delta_ms: int):
+        self._seek(max(0.0, min(1.0, (self._time_ms + delta_ms) / max(1, self._duration))))
 
     def apply_theme(self, theme: Theme):
         self._theme = theme
