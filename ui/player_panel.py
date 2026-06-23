@@ -9,7 +9,7 @@ from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QRectF, QPointF, QSize
 from PySide6.QtGui import (QColor, QPainter, QPainterPath, QLinearGradient,
-                           QPixmap, QPolygonF, QIcon)
+                           QPixmap, QPolygonF, QIcon, QPen)
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QScrollArea, QSizePolicy, QDialog, QLineEdit, QSlider, QSplitter
@@ -463,7 +463,8 @@ def _transport_icon(kind: str, color: str):
     """Paint a crisp, correctly-proportioned transport glyph (narrower than the
     wide unicode media characters). Returns (QIcon, QSize) in logical px."""
     H = 16
-    W = {"play": 13, "pause": 12, "back": 20, "fwd": 20, "start": 17}.get(kind, 16)
+    W = {"play": 13, "pause": 12, "back": 20, "fwd": 20, "start": 17,
+         "loop": 17, "save": 16}.get(kind, 16)
     dpr = 3
     pm = QPixmap(W * dpr, H * dpr)
     pm.setDevicePixelRatio(dpr)
@@ -493,6 +494,42 @@ def _transport_icon(kind: str, color: str):
     elif kind == "start":
         p.drawRect(QRectF(0, 0, 3, H))
         tri(5, 11, right=False)
+    elif kind == "loop":
+        import math
+        cx = cy = 8.0
+        r = 5.2
+        def pt(deg):
+            a = math.radians(deg)
+            return QPointF(cx + r * math.sin(a), cy - r * math.cos(a))
+        pen = QPen(QColor(color)); pen.setWidthF(2.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen); p.setBrush(Qt.BrushStyle.NoBrush)
+        for a0, a1 in ((40, 150), (220, 330)):       # two arcs, gaps for heads
+            path = QPainterPath(); path.moveTo(pt(a0))
+            steps = int(abs(a1 - a0) // 8) + 2
+            for i in range(1, steps + 1):
+                path.lineTo(pt(a0 + (a1 - a0) * i / steps))
+            p.drawPath(path)
+        p.setPen(Qt.PenStyle.NoPen); p.setBrush(QColor(color))
+        for deg in (150, 330):                        # clockwise leading ends
+            a = math.radians(deg)
+            tx, ty = math.cos(a), math.sin(a)          # clockwise tangent
+            nx, ny = -ty, tx
+            base = pt(deg)
+            tip = QPointF(base.x() + tx * 5, base.y() + ty * 5)
+            b1 = QPointF(base.x() + nx * 3.4 - tx, base.y() + ny * 3.4 - ty)
+            b2 = QPointF(base.x() - nx * 3.4 - tx, base.y() - ny * 3.4 - ty)
+            p.drawPolygon(QPolygonF([tip, b1, b2]))
+    elif kind == "save":
+        path = QPainterPath()
+        path.setFillRule(Qt.FillRule.OddEvenFill)
+        path.addPolygon(QPolygonF([                    # body, chamfered top-right
+            QPointF(1.5, 1.5), QPointF(11.5, 1.5), QPointF(14.5, 4.5),
+            QPointF(14.5, 14.5), QPointF(1.5, 14.5)]))
+        path.closeSubpath()
+        path.addRect(QRectF(5, 2.5, 5, 3))             # shutter cut-out (top)
+        path.addRect(QRectF(4, 8.5, 8, 5))             # label cut-out (bottom)
+        p.drawPath(path)
     p.end()
     return QIcon(pm), QSize(W, H)
 
@@ -524,7 +561,7 @@ class TransportBar(QFrame):
     def _setup_ui(self):
         lay = QHBoxLayout(self)
         # left margin 0 so the master column lines up with the stem lane heads
-        lay.setContentsMargins(0, 0, 24, 0)
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(18)
 
         # --- master fader (left column, aligned with the stem faders) ---
@@ -570,25 +607,22 @@ class TransportBar(QFrame):
         mg.addLayout(m_row)
         mg.addStretch()
         lay.addWidget(master_w)
+        lay.addStretch(1)   # left half of the centring pair (right gutter added below)
 
-        # time display
-        self._time_lbl = QLabel("0:00.00")
+        # time display — a single centred caption (one label, like the section
+        # captions). Using two labels in a wrapper widget made the caption
+        # expand and stretch the transport buttons apart.
+        self._total_str = _fmt_ms(self._duration)
+        self._time_lbl = QLabel(f"0:00.00  /  {self._total_str}")
+        self._time_lbl.setFixedHeight(13)
+        self._time_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._time_lbl.setStyleSheet(
-            "font-family: 'Consolas', monospace; font-size: 15px; font-weight: 500;"
-        )
-        self._total_lbl = QLabel(f" / {_fmt_ms(self._duration)}")
-        self._total_lbl.setStyleSheet(
-            f"font-family: 'Consolas', monospace; font-size: 15px; color: {self._theme.ink3};"
-        )
-        time_row = QHBoxLayout()
-        time_row.setSpacing(0)
-        time_row.addWidget(self._time_lbl)
-        time_row.addWidget(self._total_lbl)
-        lay.addLayout(time_row)
+            f"font-family: 'Consolas', monospace; font-size: 12px; "
+            f"font-weight: 600; color: {self._theme.ink3}; background: transparent;")
 
         # transport controls
         ctrl = QHBoxLayout()
-        ctrl.setSpacing(6)
+        ctrl.setSpacing(5)
 
         # Painted vector glyphs (controlled proportions, monochrome).
         start_btn = self._tbtn("", "Jump to start", icon_kind="start")
@@ -608,18 +642,25 @@ class TransportBar(QFrame):
         fwd_btn.clicked.connect(self.skip_forward)
         ctrl.addWidget(fwd_btn)
 
-        self._loop_btn = self._tbtn("⊙", "Click to set loop start (L)")
+        # Transport group: the time display sits beneath the buttons as its
+        # caption, matching the LOOP/SPEED/PITCH rows.
+        transport_group = QVBoxLayout()
+        transport_group.setSpacing(3)
+        transport_group.addLayout(ctrl)
+        transport_group.addWidget(self._time_lbl)
+        lay.addLayout(transport_group)
+
+        # --- Loop group (its own labelled section, like SPEED/PITCH) ---
+        self._loop_btn = self._tbtn("", "Click to set loop start (L)", icon_kind="loop")
         self._loop_btn.clicked.connect(self.loop_clicked)
-        ctrl.addWidget(self._loop_btn)
-
-        self._save_loop_btn = self._tbtn("★", "Save current loop")
+        self._save_loop_btn = self._tbtn("", "Save current loop", icon_kind="save")
         self._save_loop_btn.clicked.connect(self.save_loop)
-        self._save_loop_btn.hide()   # only visible when loop is active
-        ctrl.addWidget(self._save_loop_btn)
-
-        # Transport buttons sit under a blank label so their row aligns with the
-        # SPEED/PITCH button rows (which carry a centred label above them).
-        lay.addLayout(self._labeled("", ctrl))
+        self._save_loop_btn.setEnabled(False)   # greyed until a loop is active
+        loop_row = QHBoxLayout()
+        loop_row.setSpacing(5)
+        loop_row.addWidget(self._loop_btn)
+        loop_row.addWidget(self._save_loop_btn)
+        lay.addLayout(self._labeled("LOOP", loop_row))
 
         # --- Speed (− value + ), buttons styled like the transport ---
         self._speed_down_btn = self._tbtn("−", "Slower (min 0.5×)")
@@ -666,7 +707,22 @@ class TransportBar(QFrame):
         pitch_row.addWidget(self._pitch_up_btn)
         lay.addLayout(self._labeled("PITCH", pitch_row))
 
-        lay.addStretch()
+        # Equal trailing stretch (matching the leading one) centres the button
+        # cluster in the area right of the master column — i.e. under the
+        # waveforms — at any window width.
+        lay.addStretch(1)
+
+    def _tbtn_qss(self, darker: bool = False, color: str = "") -> str:
+        bg = self._theme.surface3 if darker else self._theme.surface2
+        hover = self._theme.border if darker else self._theme.surface3
+        col = color or self._theme.ink2
+        return (
+            f"QPushButton {{ background: {bg}; border: none; border-radius: 4px; "
+            f"font-size: 22px; color: {col}; outline: none; padding: 0; }}"
+            f"QPushButton:hover {{ background: {hover}; color: {self._theme.ink}; }}"
+            f"QPushButton:checked {{ background: {self._theme.accent_soft()}; color: {self._theme.accent}; }}"
+            f"QPushButton:disabled {{ color: {self._theme.ink3}; }}"
+        )
 
     def _tbtn(self, icon: str, tip: str, width: int = 42, darker: bool = False,
               icon_kind: str = "") -> QPushButton:
@@ -674,15 +730,7 @@ class TransportBar(QFrame):
         btn.setFixedSize(width, 42)
         btn.setToolTip(tip)
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        bg = self._theme.surface3 if darker else self._theme.surface2
-        hover = self._theme.border if darker else self._theme.surface3
-        btn.setStyleSheet(
-            f"QPushButton {{ background: {bg}; border: none; border-radius: 4px; "
-            f"font-size: 22px; color: {self._theme.ink2}; outline: none; padding: 0; }}"
-            f"QPushButton:hover {{ background: {hover}; color: {self._theme.ink}; }}"
-            f"QPushButton:checked {{ background: {self._theme.accent_soft()}; color: {self._theme.accent}; }}"
-            f"QPushButton:disabled {{ color: {self._theme.ink3}; }}"
-        )
+        btn.setStyleSheet(self._tbtn_qss(darker))
         if icon_kind:
             ico, sz = _transport_icon(icon_kind, self._theme.ink2)
             btn.setIcon(ico)
@@ -692,8 +740,8 @@ class TransportBar(QFrame):
         return btn
 
     def _labeled(self, text: str, row: QHBoxLayout) -> QVBoxLayout:
-        """A control group: a centred caption above a row of controls. An empty
-        caption still reserves height so rows line up across groups."""
+        """A control group: a row of controls with a centred caption beneath it.
+        An empty caption still reserves height so rows line up across groups."""
         box = QVBoxLayout()
         box.setSpacing(3)
         lbl = QLabel(text)
@@ -701,8 +749,8 @@ class TransportBar(QFrame):
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setStyleSheet(
             f"font-size: 10px; font-weight: 600; letter-spacing: 0.1em; color: {self._theme.ink3};")
-        box.addWidget(lbl)
         box.addLayout(row)
+        box.addWidget(lbl)
         return box
 
     def _value_box(self, text: str, tip: str = "") -> QLabel:
@@ -783,21 +831,17 @@ class TransportBar(QFrame):
 
     def set_loop_state(self, state: int):
         """0 = no loop, 1 = start set, 2 = loop active."""
-        icons   = ["⊙", "⊙", "⊛"]
         tips    = ["Click to set loop start (L)",
                    "Click to set loop end (L)",
                    "Click to clear loop (L)"]
         colours = [self._theme.ink2,
                    "#F2A23A",          # orange = waiting for end point
                    self._theme.accent] # blue   = loop active
-        self._loop_btn.setText(icons[state])
         self._loop_btn.setToolTip(tips[state])
-        self._loop_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; border-radius: 21px; "
-            f"font-size: 16px; color: {colours[state]}; }}"
-            f"QPushButton:hover {{ background: {self._theme.surface2}; }}"
-        )
-        self._save_loop_btn.setVisible(state == 2)
+        ico, sz = _transport_icon("loop", colours[state])   # repaint in state colour
+        self._loop_btn.setIcon(ico)
+        self._loop_btn.setIconSize(sz)
+        self._save_loop_btn.setEnabled(state == 2)   # always visible, greyed when idle
 
     def set_playing(self, playing: bool):
         ico, sz = _transport_icon("pause" if playing else "play", self._theme.ink2)
@@ -805,11 +849,12 @@ class TransportBar(QFrame):
         self._play_btn.setIconSize(sz)
 
     def set_time(self, ms: int):
-        self._time_lbl.setText(_fmt_ms(ms))
+        self._time_lbl.setText(f"{_fmt_ms(ms)}  /  {self._total_str}")
 
     def set_duration(self, ms: int):
         self._duration = ms
-        self._total_lbl.setText(f" / {_fmt_ms(ms)}")
+        self._total_str = _fmt_ms(ms)
+        self._time_lbl.setText(f"{_fmt_ms(0)}  /  {self._total_str}")
 
 
 # ---------------------------------------------------------------------------
