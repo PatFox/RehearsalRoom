@@ -7,8 +7,9 @@ Faithfully implements the design prototype (player.jsx) and adds:
 from __future__ import annotations
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, Slot, QTimer, QRectF
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient
+from PySide6.QtCore import Qt, Signal, Slot, QTimer, QRectF, QPointF, QSize
+from PySide6.QtGui import (QColor, QPainter, QPainterPath, QLinearGradient,
+                           QPixmap, QPolygonF, QIcon)
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QScrollArea, QSizePolicy, QDialog, QLineEdit, QSlider, QSplitter
@@ -458,6 +459,44 @@ class StemLane(QFrame):
 # Transport bar
 # ---------------------------------------------------------------------------
 
+def _transport_icon(kind: str, color: str):
+    """Paint a crisp, correctly-proportioned transport glyph (narrower than the
+    wide unicode media characters). Returns (QIcon, QSize) in logical px."""
+    H = 16
+    W = {"play": 13, "pause": 12, "back": 20, "fwd": 20, "start": 17}.get(kind, 16)
+    dpr = 3
+    pm = QPixmap(W * dpr, H * dpr)
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(color))
+
+    def tri(x, w, right=True):
+        if right:
+            p.drawPolygon(QPolygonF([QPointF(x, 0), QPointF(x, H), QPointF(x + w, H / 2)]))
+        else:
+            p.drawPolygon(QPolygonF([QPointF(x + w, 0), QPointF(x + w, H), QPointF(x, H / 2)]))
+
+    if kind == "play":
+        tri(0, W)
+    elif kind == "pause":
+        p.drawRect(QRectF(0, 0, 4, H))
+        p.drawRect(QRectF(W - 4, 0, 4, H))
+    elif kind == "back":
+        tri(0, 9, right=False)
+        tri(11, 9, right=False)
+    elif kind == "fwd":
+        tri(0, 9, right=True)
+        tri(11, 9, right=True)
+    elif kind == "start":
+        p.drawRect(QRectF(0, 0, 3, H))
+        tri(5, 11, right=False)
+    p.end()
+    return QIcon(pm), QSize(W, H)
+
+
 class TransportBar(QFrame):
     play_pause     = Signal()
     restart        = Signal()      # jump to start
@@ -551,22 +590,21 @@ class TransportBar(QFrame):
         ctrl = QHBoxLayout()
         ctrl.setSpacing(6)
 
-        # Geometric (non-emoji) glyphs so Windows renders them monochrome
-        # rather than as coloured/framed emoji.
-        start_btn = self._tbtn("|◄", "Jump to start")
+        # Painted vector glyphs (controlled proportions, monochrome).
+        start_btn = self._tbtn("", "Jump to start", icon_kind="start")
         start_btn.clicked.connect(self.restart)
         ctrl.addWidget(start_btn)
 
-        back_btn = self._tbtn("◄◄", "Skip back 5 s")
+        back_btn = self._tbtn("", "Skip back 5 s", icon_kind="back")
         back_btn.clicked.connect(self.skip_back)
         ctrl.addWidget(back_btn)
 
         # Play / pause — twice as wide as tall, slightly darker grey
-        self._play_btn = self._tbtn("►", "Play / pause", width=84, darker=True)
+        self._play_btn = self._tbtn("", "Play / pause", width=84, darker=True, icon_kind="play")
         self._play_btn.clicked.connect(self.play_pause)
         ctrl.addWidget(self._play_btn)
 
-        fwd_btn = self._tbtn("►►", "Skip forward 5 s")
+        fwd_btn = self._tbtn("", "Skip forward 5 s", icon_kind="fwd")
         fwd_btn.clicked.connect(self.skip_forward)
         ctrl.addWidget(fwd_btn)
 
@@ -682,8 +720,9 @@ class TransportBar(QFrame):
 
         lay.addStretch()
 
-    def _tbtn(self, icon: str, tip: str, width: int = 42, darker: bool = False) -> QPushButton:
-        btn = QPushButton(icon)
+    def _tbtn(self, icon: str, tip: str, width: int = 42, darker: bool = False,
+              icon_kind: str = "") -> QPushButton:
+        btn = QPushButton()
         btn.setFixedSize(width, 42)
         btn.setToolTip(tip)
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -691,10 +730,16 @@ class TransportBar(QFrame):
         hover = self._theme.border if darker else self._theme.surface3
         btn.setStyleSheet(
             f"QPushButton {{ background: {bg}; border: none; border-radius: 4px; "
-            f"font-size: 26px; color: {self._theme.ink2}; outline: none; padding: 0; }}"
+            f"font-size: 22px; color: {self._theme.ink2}; outline: none; padding: 0; }}"
             f"QPushButton:hover {{ background: {hover}; color: {self._theme.ink}; }}"
             f"QPushButton:checked {{ background: {self._theme.accent_soft()}; color: {self._theme.accent}; }}"
         )
+        if icon_kind:
+            ico, sz = _transport_icon(icon_kind, self._theme.ink2)
+            btn.setIcon(ico)
+            btn.setIconSize(sz)
+        else:
+            btn.setText(icon)
         return btn
 
     def _speed_down(self):
@@ -777,7 +822,9 @@ class TransportBar(QFrame):
         self._save_loop_btn.setVisible(state == 2)
 
     def set_playing(self, playing: bool):
-        self._play_btn.setText("▮▮" if playing else "►")
+        ico, sz = _transport_icon("pause" if playing else "play", self._theme.ink2)
+        self._play_btn.setIcon(ico)
+        self._play_btn.setIconSize(sz)
 
     def set_time(self, ms: int):
         self._time_lbl.setText(_fmt_ms(ms))
