@@ -207,6 +207,16 @@ class StemPlayer:
         import sounddevice as sd
         if self._playing or not self._stems:
             return
+        # A stream that finished (CallbackStop at end-of-track) can't be
+        # reliably restarted with start() on all backends — on Windows it
+        # returns without error yet produces no audio. So always (re)create a
+        # fresh stream whenever there isn't an active one.
+        if self._stream is not None and not self._stream.active:
+            try:
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
         if self._stream is None:
             self._stream = sd.OutputStream(
                 samplerate=self._sr,
@@ -217,25 +227,7 @@ class StemPlayer:
                 finished_callback=self._on_finished,
             )
         self._playing = True
-        if not self._stream.active:
-            try:
-                self._stream.start()
-            except Exception:
-                # Stream couldn't be restarted (e.g. after CallbackStop on
-                # some hosts) — recreate it.
-                try:
-                    self._stream.close()
-                except Exception:
-                    pass
-                self._stream = sd.OutputStream(
-                    samplerate=self._sr,
-                    channels=2,
-                    dtype="float32",
-                    blocksize=1024,
-                    callback=self._callback,
-                    finished_callback=self._on_finished,
-                )
-                self._stream.start()
+        self._stream.start()
 
     def pause(self) -> None:
         self._playing = False
