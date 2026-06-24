@@ -1,5 +1,5 @@
 @echo off
-REM ── Rehearsal Room — release build script ──────────────────────────────
+REM ── Rehearsal Room - release build script ─────────────────────────────
 REM Run from the project root:  build.bat
 REM Optionally pass a version:  build.bat 1.2.0
 
@@ -8,9 +8,9 @@ set VERSION=%~1
 if "%VERSION%"=="" set VERSION=1.0.0
 
 echo.
-echo ══════════════════════════════════════════════════════
+echo ======================================================
 echo  Rehearsal Room build  v%VERSION%
-echo ══════════════════════════════════════════════════════
+echo ======================================================
 echo.
 
 REM ── 1. PyInstaller ────────────────────────────────────────────────────
@@ -54,7 +54,7 @@ if %ISCC%=="" (
 echo Building installer...
 if not exist installer\output mkdir installer\output
 
-%ISCC% /Q "/DAppVersion=%VERSION%" installer\rehearsalroom.iss
+%ISCC% "/DAppVersion=%VERSION%" installer\rehearsalroom.iss
 if errorlevel 1 (
     echo.
     echo INSTALLER BUILD FAILED. See output above.
@@ -65,7 +65,7 @@ echo  Installer ready: installer\output\RehearsalRoom-v%VERSION%-Setup.exe
 
 :done
 echo.
-echo ══════════════════════════════════════════════════════
+echo ======================================================
 echo  Done!  v%VERSION%
-echo ══════════════════════════════════════════════════════
+echo ======================================================
 endlocal
