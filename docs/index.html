@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rehearsal Room — Practice any song, part by part</title>
+  <meta name="description" content="Rehearsal Room is a free, open-source practice tool for musicians. Split a track into stems, slow it down, loop the hard bits, and shift the key — everything you need to learn a song by ear.">
+  <meta property="og:title" content="Rehearsal Room — Practice any song, part by part">
+  <meta property="og:description" content="Free, open-source music practice tool. Stem separation, speed control, pitch shifting, and looping.">
+  <meta property="og:type" content="website">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Hanken+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #FBF4E8; font-family: 'Hanken Grotesk', sans-serif; color: #2A2018; min-height: 100vh; }
+    .wrap { max-width: 1280px; margin: 0 auto; }
+
+    a { transition: color 0.15s, background 0.15s, border-color 0.15s; }
+
+    .btn-nav-gh {
+      display: inline-flex; align-items: center; gap: 8px;
+      text-decoration: none; color: #2A2018; font-weight: 700; font-size: 14px;
+      background: #fff; border: 1.5px solid #E7DCC6; border-radius: 11px; padding: 9px 14px;
+    }
+    .btn-nav-gh:hover { border-color: #D2552E; color: #B8431F; }
+
+    .btn-nav-dl {
+      display: inline-flex; align-items: center; gap: 8px;
+      text-decoration: none; background: #D2552E; color: #fff;
+      font-weight: 700; font-size: 14px; border-radius: 11px; padding: 10px 16px;
+      box-shadow: 0 8px 18px -8px rgba(210,85,46,.7);
+    }
+    .btn-nav-dl:hover { background: #B8431F; }
+
+    .btn-hero-primary {
+      display: inline-flex; align-items: center; gap: 9px;
+      background: #D2552E; color: #fff; font-weight: 700; font-size: 16px;
+      padding: 15px 24px; border-radius: 13px; text-decoration: none;
+      box-shadow: 0 10px 24px -10px rgba(210,85,46,.7);
+    }
+    .btn-hero-primary:hover { background: #B8431F; }
+
+    .btn-hero-ghost {
+      display: inline-flex; align-items: center; gap: 9px;
+      background: #fff; color: #2A2018; font-weight: 700; font-size: 16px;
+      padding: 15px 22px; border-radius: 13px; text-decoration: none;
+      border: 1.5px solid #E4D6BE;
+    }
+    .btn-hero-ghost:hover { border-color: #D2552E; color: #B8431F; }
+
+    .btn-play {
+      width: 84px; height: 84px; border-radius: 50%; background: #D2552E;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 16px 40px -10px rgba(210,85,46,.8); cursor: pointer;
+      border: none;
+    }
+    .btn-play:hover { background: #B8431F; }
+
+    .btn-semitone {
+      width: 42px; height: 42px; border-radius: 12px; border: 1.5px solid #E4D6BE;
+      background: #FBF3E6; font-size: 20px; font-weight: 700; color: #2A2018;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+    }
+    .btn-semitone:hover { border-color: #D2552E; color: #D2552E; }
+
+    .btn-cta-primary {
+      display: inline-flex; align-items: center; gap: 9px;
+      background: #fff; color: #B8431F; font-weight: 800; font-size: 16px;
+      padding: 15px 26px; border-radius: 13px; text-decoration: none;
+      box-shadow: 0 10px 26px -10px rgba(0,0,0,.4);
+    }
+    .btn-cta-primary:hover { background: #FFF4ED; }
+
+    .btn-cta-ghost {
+      display: inline-flex; align-items: center; gap: 9px;
+      background: rgba(255,255,255,.14); color: #fff; font-weight: 700; font-size: 16px;
+      padding: 15px 24px; border-radius: 13px; text-decoration: none;
+      border: 1.5px solid rgba(255,255,255,.35);
+    }
+    .btn-cta-ghost:hover { background: rgba(255,255,255,.24); }
+
+    .ftr-link { color: #C9BBAA; text-decoration: none; font-size: 14px; }
+    .ftr-link:hover { color: #fff; }
+
+    @media (max-width: 840px) {
+      .hero-section { flex-direction: column !important; gap: 36px !important; }
+      .hero-text { flex: none !important; }
+      .hero-mock { padding: 0 !important; }
+      .hero-badge { display: none !important; }
+      .hero-glow { display: none !important; }
+      .hero-h1 { font-size: 40px !important; }
+      .about-card { flex-direction: column !important; gap: 24px !important; padding: 32px 28px !important; }
+      .about-card h2 { flex: none !important; }
+      .feat-row { flex-direction: column !important; gap: 32px !important; }
+      .feat-mock { flex: none !important; width: 100% !important; }
+      .cta-inner { padding: 40px 28px !important; }
+      .ftr-inner { flex-direction: column !important; gap: 32px !important; }
+      .ftr-links { gap: 40px !important; }
+      .page-px { padding-left: 24px !important; padding-right: 24px !important; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ── HEADER ── -->
+  <header class="page-px" style="display:flex;align-items:center;justify-content:space-between;padding:24px 64px;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div style="width:40px;height:40px;border-radius:12px;background:#D2552E;display:flex;align-items:center;justify-content:center;box-shadow:0 7px 16px -7px rgba(210,85,46,.75);">
+        <svg width="19" height="19" viewBox="0 0 24 24"><rect x="3" y="8" width="3.4" height="8" rx="1.7" fill="#fff"/><rect x="10.3" y="3.5" width="3.4" height="17" rx="1.7" fill="#fff"/><rect x="17.6" y="10" width="3.4" height="4" rx="1.7" fill="#fff"/></svg>
+      </div>
+      <span style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:20px;letter-spacing:-.01em;">Rehearsal Room</span>
+    </div>
+    <nav style="display:flex;align-items:center;gap:30px;">
+      <a href="#features" style="text-decoration:none;color:#5C4F42;font-weight:600;font-size:15px;">Features</a>
+      <a href="#video" style="text-decoration:none;color:#5C4F42;font-weight:600;font-size:15px;">Watch</a>
+      <a href="https://github.com/PatFox/RehearsalRoom" class="btn-nav-gh">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.26c0 4.5 2.87 8.32 6.84 9.67.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05A9.4 9.4 0 0 1 12 6.84c.85 0 1.71.12 2.51.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.26C22 6.58 17.52 2 12 2z"/></svg>
+        GitHub
+      </a>
+      <a href="https://github.com/PatFox/RehearsalRoom/releases" class="btn-nav-dl">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4.5-4.5M12 15l4.5-4.5M4 19h16"/></svg>
+        Download
+      </a>
+    </nav>
+  </header>
+
+  <!-- ── HERO ── -->
+  <section class="hero-section page-px" style="display:flex;align-items:center;gap:44px;padding:36px 64px 60px;">
+
+    <div class="hero-text" style="flex:0 0 42%;">
+      <span style="display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #E7DCC6;border-radius:999px;padding:6px 13px;font-size:12px;font-weight:700;letter-spacing:.07em;color:#B8431F;text-transform:uppercase;">Free · Open source · Desktop</span>
+      <h1 class="hero-h1" style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:55px;line-height:1.02;letter-spacing:-.022em;margin:22px 0 0;">Learn any song, <span style="color:#D2552E;">part by part.</span></h1>
+      <p style="font-size:18px;line-height:1.55;color:#5C4F42;margin:22px 0 0;max-width:445px;">Rehearsal Room is a free, open-source practice tool for musicians. Split a track into its parts, slow it down, loop the hard bits, and shift the key — everything you need to learn a song by ear.</p>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:30px;flex-wrap:wrap;">
+        <a href="https://github.com/PatFox/RehearsalRoom/releases" class="btn-hero-primary">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4.5-4.5M12 15l4.5-4.5M4 19h16"/></svg>
+          Download for free
+        </a>
+        <a href="https://github.com/PatFox/RehearsalRoom" class="btn-hero-ghost">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.26c0 4.5 2.87 8.32 6.84 9.67.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05A9.4 9.4 0 0 1 12 6.84c.85 0 1.71.12 2.51.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.26C22 6.58 17.52 2 12 2z"/></svg>
+          View on GitHub
+        </a>
+      </div>
+      <p style="margin-top:16px;font-size:13.5px;color:#8A7B68;">Windows — free forever, MIT licensed.</p>
+    </div>
+
+    <div class="hero-mock" style="flex:1;min-width:0;position:relative;padding:14px 0;">
+      <!-- glow -->
+      <div class="hero-glow" style="position:absolute;inset:-26px -16px;background:radial-gradient(58% 58% at 28% 22%,rgba(232,163,61,.32),transparent 72%),radial-gradient(58% 58% at 82% 84%,rgba(210,85,46,.26),transparent 72%);filter:blur(8px);border-radius:44px;pointer-events:none;"></div>
+      <!-- App card -->
+      <div style="position:relative;background:#FFFDF8;border:1px solid #ECE0CB;border-radius:16px;box-shadow:0 34px 64px -22px rgba(60,40,20,.4),0 12px 24px -14px rgba(60,40,20,.24);overflow:hidden;">
+        <!-- Title bar -->
+        <div style="display:flex;align-items:center;gap:8px;padding:12px 15px;border-bottom:1px solid #F0E7D6;background:#FBF3E6;">
+          <span style="width:11px;height:11px;border-radius:50%;background:#E5897B;display:inline-block;"></span>
+          <span style="width:11px;height:11px;border-radius:50%;background:#EBC36A;display:inline-block;"></span>
+          <span style="width:11px;height:11px;border-radius:50%;background:#9DC08B;display:inline-block;"></span>
+          <div style="flex:1;text-align:center;font-size:12px;color:#9A8B79;font-weight:600;">Riverbend — practice.mp3</div>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#C3B49E" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg>
+        </div>
+        <!-- Transport bar -->
+        <div style="display:flex;align-items:center;gap:12px;padding:14px 16px;">
+          <div style="width:38px;height:38px;border-radius:50%;background:#D2552E;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 5px 12px -5px rgba(210,85,46,.8);">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg>
+          </div>
+          <div style="font-weight:700;font-size:14px;font-variant-numeric:tabular-nums;white-space:nowrap;">1:24 <span style="color:#B6A88F;font-weight:600;">/ 3:47</span></div>
+          <div style="flex:1;"></div>
+          <span style="background:#fff;border:1px solid #ECE0CB;border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;color:#6B5E50;white-space:nowrap;">0.85×</span>
+          <span style="background:#fff;border:1px solid #ECE0CB;border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;color:#6B5E50;white-space:nowrap;">Key −2</span>
+          <span style="background:#FBE6D8;border:1px solid #ECC3AC;border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;color:#C24A22;white-space:nowrap;">Loop A–B</span>
+        </div>
+        <!-- Waveform -->
+        <div style="padding:0 16px 14px;">
+          <div style="position:relative;background:#FBF3E6;border-radius:11px;height:108px;overflow:hidden;">
+            <div data-wave="hero" style="position:absolute;inset:0;"></div>
+            <div style="position:absolute;top:8px;bottom:8px;left:34%;width:25%;background:rgba(210,85,46,.13);border-left:2px solid #D2552E;border-right:2px solid #D2552E;border-radius:5px;pointer-events:none;"></div>
+            <div style="position:absolute;top:4px;bottom:4px;left:43%;width:2px;background:#2A2018;border-radius:2px;pointer-events:none;"></div>
+          </div>
+        </div>
+        <!-- Stem lanes -->
+        <div style="padding:0 16px 16px;display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;align-items:center;gap:12px;background:#FBF3E6;border-radius:11px;padding:9px 12px;">
+            <div style="display:flex;align-items:center;gap:8px;width:78px;flex-shrink:0;"><span style="width:9px;height:9px;border-radius:50%;background:#D2552E;display:inline-block;"></span><span style="font-weight:700;font-size:13px;">Vocals</span></div>
+            <div data-wave="vox" style="flex:1;height:26px;min-width:0;"></div>
+            <div style="position:relative;width:90px;height:6px;background:#E7D9C2;border-radius:3px;flex-shrink:0;"><div style="position:absolute;left:0;top:0;bottom:0;width:78%;background:#D2552E;border-radius:3px;"></div><div style="position:absolute;left:78%;top:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#fff;border:2px solid #D2552E;box-shadow:0 1px 3px rgba(0,0,0,.25);"></div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;background:#FBF3E6;border-radius:11px;padding:9px 12px;">
+            <div style="display:flex;align-items:center;gap:8px;width:78px;flex-shrink:0;"><span style="width:9px;height:9px;border-radius:50%;background:#E0982F;display:inline-block;"></span><span style="font-weight:700;font-size:13px;">Drums</span></div>
+            <div data-wave="drum" style="flex:1;height:26px;min-width:0;"></div>
+            <div style="position:relative;width:90px;height:6px;background:#E7D9C2;border-radius:3px;flex-shrink:0;"><div style="position:absolute;left:0;top:0;bottom:0;width:55%;background:#E0982F;border-radius:3px;"></div><div style="position:absolute;left:55%;top:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#fff;border:2px solid #E0982F;box-shadow:0 1px 3px rgba(0,0,0,.25);"></div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;background:#FBF3E6;border-radius:11px;padding:9px 12px;opacity:.55;">
+            <div style="display:flex;align-items:center;gap:8px;width:78px;flex-shrink:0;"><span style="width:9px;height:9px;border-radius:50%;background:#6F8466;display:inline-block;"></span><span style="font-weight:700;font-size:13px;">Bass</span></div>
+            <div data-wave="bass" style="flex:1;height:26px;min-width:0;"></div>
+            <div style="position:relative;width:90px;height:6px;background:#E7D9C2;border-radius:3px;flex-shrink:0;"><div style="position:absolute;left:0;top:0;bottom:0;width:12%;background:#6F8466;border-radius:3px;"></div><div style="position:absolute;left:12%;top:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#fff;border:2px solid #6F8466;box-shadow:0 1px 3px rgba(0,0,0,.25);"></div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;background:#FBF3E6;border-radius:11px;padding:9px 12px;">
+            <div style="display:flex;align-items:center;gap:8px;width:78px;flex-shrink:0;"><span style="width:9px;height:9px;border-radius:50%;background:#8A6FA8;display:inline-block;"></span><span style="font-weight:700;font-size:13px;">Other</span></div>
+            <div data-wave="oth" style="flex:1;height:26px;min-width:0;"></div>
+            <div style="position:relative;width:90px;height:6px;background:#E7D9C2;border-radius:3px;flex-shrink:0;"><div style="position:absolute;left:0;top:0;bottom:0;width:64%;background:#8A6FA8;border-radius:3px;"></div><div style="position:absolute;left:64%;top:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#fff;border:2px solid #8A6FA8;box-shadow:0 1px 3px rgba(0,0,0,.25);"></div></div>
+          </div>
+        </div>
+      </div>
+      <!-- Floating badges -->
+      <div class="hero-badge" style="position:absolute;top:-16px;right:18px;background:#fff;border:1px solid #ECE0CB;border-radius:12px;padding:9px 13px;box-shadow:0 14px 28px -14px rgba(60,40,20,.4);display:flex;align-items:center;gap:9px;z-index:1;">
+        <span style="width:26px;height:26px;border-radius:8px;background:#FBE6D8;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#C24A22" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
+        <div style="font-size:12px;font-weight:700;color:#2A2018;line-height:1.2;">Loop saved<br><span style="color:#9A8B79;font-weight:600;font-size:11px;">"Guitar solo"</span></div>
+      </div>
+      <div class="hero-badge" style="position:absolute;bottom:30px;left:-24px;background:#fff;border:1px solid #ECE0CB;border-radius:12px;padding:9px 13px;box-shadow:0 14px 28px -14px rgba(60,40,20,.4);display:flex;align-items:center;gap:9px;z-index:1;">
+        <span style="width:26px;height:26px;border-radius:8px;background:#EFF1EA;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6F8466" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5v14"/></svg></span>
+        <div style="font-size:12px;font-weight:700;color:#2A2018;line-height:1.2;">Isolate vocals<br><span style="color:#9A8B79;font-weight:600;font-size:11px;">one click</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── ABOUT ── -->
+  <section class="page-px" style="padding:6px 64px 60px;">
+    <div class="about-card" style="background:#fff;border:1px solid #EFE5D2;border-radius:20px;padding:48px 56px;display:flex;gap:48px;align-items:flex-start;">
+      <h2 style="flex:0 0 38%;font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:30px;line-height:1.12;letter-spacing:-.015em;">Your own practice room — for any song you want to learn.</h2>
+      <div style="flex:1;">
+        <p style="font-size:17px;line-height:1.62;color:#5C4F42;">Drop in a track and Rehearsal Room becomes the patient bandmate who plays it as slowly as you need, as many times as you need. Mute the guitar to play along, loop the bridge until it's in your fingers, or drop the key to match your voice.</p>
+        <p style="font-size:17px;line-height:1.62;color:#5C4F42;margin-top:16px;">No subscriptions, no accounts, no uploads — everything runs on your machine. It's open source, so you can read every line, file an issue, or build the feature you wish it had.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── VIDEO ── -->
+  <section id="video" class="page-px" style="padding:6px 64px 64px;text-align:center;">
+    <span style="font-size:13px;font-weight:700;letter-spacing:.08em;color:#B8431F;text-transform:uppercase;">See it in action</span>
+    <h2 style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:38px;letter-spacing:-.02em;margin:12px 0 28px;">A two-minute tour</h2>
+    <div style="position:relative;border-radius:18px;overflow:hidden;box-shadow:0 30px 60px -26px rgba(60,40,20,.5);border:1px solid #ECE0CB;background:linear-gradient(135deg,#2E241B,#4A382A);aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;">
+      <div style="position:absolute;inset:0;background:radial-gradient(50% 60% at 50% 45%,rgba(232,163,61,.34),transparent 70%);pointer-events:none;"></div>
+      <div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:18px;">
+        <button class="btn-play" aria-label="Watch intro video (coming soon)">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <span style="color:#F6E8D5;font-weight:700;font-size:15px;">Coming soon</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── FEATURES ── -->
+  <section id="features" class="page-px" style="padding:24px 64px 56px;">
+    <div style="text-align:center;margin-bottom:48px;">
+      <span style="font-size:13px;font-weight:700;letter-spacing:.08em;color:#B8431F;text-transform:uppercase;">Features</span>
+      <h2 style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:40px;letter-spacing:-.02em;margin:12px 0 0;">Everything you need to woodshed.</h2>
+    </div>
+
+    <!-- 01 Stem separation -->
+    <div class="feat-row" style="display:flex;align-items:center;gap:56px;margin-bottom:56px;">
+      <div class="feat-mock" style="flex:0 0 44%;">
+        <div style="background:#fff;border:1px solid #ECE0CB;border-radius:16px;box-shadow:0 22px 44px -26px rgba(60,40,20,.4);padding:18px;display:flex;flex-direction:column;gap:9px;">
+          <div style="display:flex;align-items:center;gap:10px;background:#FBF3E6;border-radius:10px;padding:8px 12px;"><span style="width:9px;height:9px;border-radius:50%;background:#D2552E;display:inline-block;flex-shrink:0;"></span><span style="font-weight:700;font-size:13px;width:54px;flex-shrink:0;">Vocals</span><div data-wave="vox" style="flex:1;height:22px;min-width:0;"></div></div>
+          <div style="display:flex;align-items:center;gap:10px;background:#FBF3E6;border-radius:10px;padding:8px 12px;"><span style="width:9px;height:9px;border-radius:50%;background:#E0982F;display:inline-block;flex-shrink:0;"></span><span style="font-weight:700;font-size:13px;width:54px;flex-shrink:0;">Drums</span><div data-wave="drum" style="flex:1;height:22px;min-width:0;"></div></div>
+          <div style="display:flex;align-items:center;gap:10px;background:#FBF3E6;border-radius:10px;padding:8px 12px;"><span style="width:9px;height:9px;border-radius:50%;background:#6F8466;display:inline-block;flex-shrink:0;"></span><span style="font-weight:700;font-size:13px;width:54px;flex-shrink:0;">Bass</span><div data-wave="bass" style="flex:1;height:22px;min-width:0;"></div></div>
+          <div style="display:flex;align-items:center;gap:10px;background:#FBF3E6;border-radius:10px;padding:8px 12px;"><span style="width:9px;height:9px;border-radius:50%;background:#8A6FA8;display:inline-block;flex-shrink:0;"></span><span style="font-weight:700;font-size:13px;width:54px;flex-shrink:0;">Other</span><div data-wave="oth" style="flex:1;height:22px;min-width:0;"></div></div>
+        </div>
+      </div>
+      <div style="flex:1;">
+        <span style="display:inline-block;font-family:'Hanken Grotesk',sans-serif;font-size:13px;font-weight:800;color:#D2552E;letter-spacing:.04em;">01</span>
+        <h3 style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:27px;letter-spacing:-.01em;margin:6px 0 10px;">Stem separation</h3>
+        <p style="font-size:17px;line-height:1.6;color:#5C4F42;max-width:440px;">Split any song into separate stem tracks — vocals, drums, bass, and "other" — and control the volume of each one independently. Mute the part you're learning and play along with the rest of the band.</p>
+      </div>
+    </div>
+
+    <!-- 02 Speed & looping (reversed) -->
+    <div class="feat-row" style="display:flex;align-items:center;gap:56px;margin-bottom:56px;flex-direction:row-reverse;">
+      <div class="feat-mock" style="flex:0 0 44%;">
+        <div style="background:#fff;border:1px solid #ECE0CB;border-radius:16px;box-shadow:0 22px 44px -26px rgba(60,40,20,.4);padding:18px;">
+          <div style="position:relative;background:#FBF3E6;border-radius:11px;height:84px;overflow:hidden;">
+            <div data-wave="loop" style="position:absolute;inset:0;"></div>
+            <div style="position:absolute;top:8px;bottom:8px;left:30%;width:34%;background:rgba(210,85,46,.13);border-left:2px solid #D2552E;border-right:2px solid #D2552E;border-radius:5px;pointer-events:none;"></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;margin-top:14px;">
+            <span style="font-size:12px;font-weight:700;color:#8A7B68;white-space:nowrap;">SPEED</span>
+            <div style="position:relative;flex:1;height:6px;background:#E7D9C2;border-radius:3px;"><div style="position:absolute;left:0;top:0;bottom:0;width:42%;background:#E0982F;border-radius:3px;"></div><div style="position:absolute;left:42%;top:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#fff;border:2px solid #E0982F;box-shadow:0 1px 3px rgba(0,0,0,.25);"></div></div>
+            <span style="font-weight:800;font-size:14px;color:#2A2018;font-variant-numeric:tabular-nums;white-space:nowrap;">0.70×</span>
+          </div>
+          <div style="display:flex;gap:7px;margin-top:14px;flex-wrap:wrap;">
+            <span style="background:#FBE6D8;border:1px solid #ECC3AC;border-radius:8px;padding:5px 10px;font-size:12px;font-weight:700;color:#C24A22;">Intro loop</span>
+            <span style="background:#FBF3E6;border:1px solid #ECE0CB;border-radius:8px;padding:5px 10px;font-size:12px;font-weight:700;color:#6B5E50;">Chorus loop</span>
+            <span style="background:#FBF3E6;border:1px solid #ECE0CB;border-radius:8px;padding:5px 10px;font-size:12px;font-weight:700;color:#6B5E50;">Guitar solo</span>
+          </div>
+        </div>
+      </div>
+      <div style="flex:1;">
+        <span style="display:inline-block;font-size:13px;font-weight:800;color:#D2552E;letter-spacing:.04em;">02</span>
+        <h3 style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:27px;letter-spacing:-.01em;margin:6px 0 10px;">Speed control &amp; looping</h3>
+        <p style="font-size:17px;line-height:1.6;color:#5C4F42;max-width:440px;">Slow a song down — without changing its pitch — and create loops to master the tricky parts. Save as many loops as you like, name them, and recall them whenever you sit down to practice.</p>
+      </div>
+    </div>
+
+    <!-- 03 Pitch control -->
+    <div class="feat-row" style="display:flex;align-items:center;gap:56px;margin-bottom:56px;">
+      <div class="feat-mock" style="flex:0 0 44%;">
+        <div style="background:#fff;border:1px solid #ECE0CB;border-radius:16px;box-shadow:0 22px 44px -26px rgba(60,40,20,.4);padding:24px;display:flex;align-items:center;justify-content:center;gap:26px;flex-wrap:wrap;">
+          <div style="display:flex;flex-direction:column;gap:10px;align-items:center;">
+            <button class="btn-semitone">+</button>
+            <button class="btn-semitone">−</button>
+          </div>
+          <div style="text-align:center;">
+            <div style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:46px;color:#D2552E;line-height:1;">−2</div>
+            <div style="font-size:13px;font-weight:700;color:#8A7B68;margin-top:4px;letter-spacing:.04em;">SEMITONES</div>
+          </div>
+          <div style="display:flex;gap:3px;align-items:flex-end;height:60px;">
+            <div style="width:9px;height:60px;background:#EFE5D2;border-radius:2px;"></div>
+            <div style="width:6px;height:38px;background:#2A2018;border-radius:2px;"></div>
+            <div style="width:9px;height:60px;background:#D2552E;border-radius:2px;"></div>
+            <div style="width:6px;height:38px;background:#2A2018;border-radius:2px;"></div>
+            <div style="width:9px;height:60px;background:#EFE5D2;border-radius:2px;"></div>
+            <div style="width:9px;height:60px;background:#EFE5D2;border-radius:2px;"></div>
+            <div style="width:6px;height:38px;background:#2A2018;border-radius:2px;"></div>
+            <div style="width:9px;height:60px;background:#EFE5D2;border-radius:2px;"></div>
+          </div>
+        </div>
+      </div>
+      <div style="flex:1;">
+        <span style="display:inline-block;font-size:13px;font-weight:800;color:#D2552E;letter-spacing:.04em;">03</span>
+        <h3 style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:27px;letter-spacing:-.01em;margin:6px 0 10px;">Pitch control</h3>
+        <p style="font-size:17px;line-height:1.6;color:#5C4F42;max-width:440px;">Need to raise or lower the pitch of the song without changing the tempo? No problem — shift up or down by up to a full octave to match your instrument or your voice.</p>
+      </div>
+    </div>
+
+    <!-- 04 Tab (reversed) -->
+    <div class="feat-row" style="display:flex;align-items:center;gap:56px;margin-bottom:56px;flex-direction:row-reverse;">
+      <div class="feat-mock" style="flex:0 0 44%;">
+        <div style="background:#fff;border:1px solid #ECE0CB;border-radius:16px;box-shadow:0 22px 44px -26px rgba(60,40,20,.4);padding:20px;font-family:'Hanken Grotesk',sans-serif;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <span style="font-weight:800;font-size:13px;color:#8A7B68;letter-spacing:.04em;">GUITAR · BARS 9–10</span>
+            <span style="background:#FBE6D8;color:#C24A22;border-radius:7px;padding:3px 8px;font-size:11px;font-weight:700;">experimental</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:7px;font-variant-numeric:tabular-nums;font-weight:700;font-size:13px;color:#5C4F42;">
+            <div style="display:flex;align-items:center;gap:10px;"><span style="width:14px;color:#B6A88F;flex-shrink:0;">e</span><div style="flex:1;height:1.5px;background:#E7D9C2;position:relative;"><span style="position:absolute;left:20%;top:-9px;background:#fff;padding:0 3px;color:#2A2018;">3</span><span style="position:absolute;left:62%;top:-9px;background:#fff;padding:0 3px;color:#2A2018;">5</span></div></div>
+            <div style="display:flex;align-items:center;gap:10px;"><span style="width:14px;color:#B6A88F;flex-shrink:0;">B</span><div style="flex:1;height:1.5px;background:#E7D9C2;position:relative;"><span style="position:absolute;left:40%;top:-9px;background:#fff;padding:0 3px;color:#2A2018;">3</span></div></div>
+            <div style="display:flex;align-items:center;gap:10px;"><span style="width:14px;color:#B6A88F;flex-shrink:0;">G</span><div style="flex:1;height:1.5px;background:#E7D9C2;position:relative;"><span style="position:absolute;left:10%;top:-9px;background:#fff;padding:0 3px;color:#D2552E;">2</span><span style="position:absolute;left:78%;top:-9px;background:#fff;padding:0 3px;color:#2A2018;">4</span></div></div>
+            <div style="display:flex;align-items:center;gap:10px;"><span style="width:14px;color:#B6A88F;flex-shrink:0;">D</span><div style="flex:1;height:1.5px;background:#E7D9C2;position:relative;"><span style="position:absolute;left:52%;top:-9px;background:#fff;padding:0 3px;color:#2A2018;">0</span></div></div>
+            <div style="display:flex;align-items:center;gap:10px;"><span style="width:14px;color:#B6A88F;flex-shrink:0;">A</span><div style="flex:1;height:1.5px;background:#E7D9C2;"></div></div>
+            <div style="display:flex;align-items:center;gap:10px;"><span style="width:14px;color:#B6A88F;flex-shrink:0;">E</span><div style="flex:1;height:1.5px;background:#E7D9C2;"></div></div>
+          </div>
+        </div>
+      </div>
+      <div style="flex:1;">
+        <span style="display:inline-block;font-size:13px;font-weight:800;color:#D2552E;letter-spacing:.04em;">04</span>
+        <h3 style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:27px;letter-spacing:-.01em;margin:6px 0 10px;">Tab <span style="font-size:14px;font-weight:700;color:#9A8B79;vertical-align:middle;">(experimental)</span></h3>
+        <p style="font-size:17px;line-height:1.6;color:#5C4F42;max-width:440px;">Write your own tab notation for any part track and synchronise it to playback, so the right notes light up as the song plays. Multiple tabs are supported — one for each instrument you're working out.</p>
+      </div>
+    </div>
+
+    <!-- 05 YouTube -->
+    <div class="feat-row" style="display:flex;align-items:center;gap:56px;">
+      <div class="feat-mock" style="flex:0 0 44%;">
+        <div style="background:#fff;border:1px solid #ECE0CB;border-radius:16px;box-shadow:0 22px 44px -26px rgba(60,40,20,.4);padding:20px;">
+          <div style="display:flex;align-items:center;gap:10px;background:#FBF3E6;border:1px solid #ECE0CB;border-radius:11px;padding:11px 13px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="#E5673B" style="flex-shrink:0;"><path d="M21.6 7.2a2.7 2.7 0 0 0-1.9-1.9C18 4.8 12 4.8 12 4.8s-6 0-7.7.5A2.7 2.7 0 0 0 2.4 7.2 28 28 0 0 0 2 12a28 28 0 0 0 .4 4.8 2.7 2.7 0 0 0 1.9 1.9c1.7.5 7.7.5 7.7.5s6 0 7.7-.5a2.7 2.7 0 0 0 1.9-1.9A28 28 0 0 0 22 12a28 28 0 0 0-.4-4.8zM10 15.2V8.8l5.2 3.2z"/></svg>
+            <span style="flex:1;font-size:13px;color:#8A7B68;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">youtube.com/watch?v=…</span>
+            <span style="background:#D2552E;color:#fff;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;flex-shrink:0;">Fetch</span>
+          </div>
+          <div style="margin-top:14px;display:flex;align-items:center;gap:12px;">
+            <div style="width:56px;height:42px;border-radius:8px;background:linear-gradient(135deg,#E0982F,#D2552E);flex-shrink:0;"></div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:700;font-size:13px;margin-bottom:6px;">Downloading audio…</div>
+              <div style="height:6px;background:#E7D9C2;border-radius:3px;"><div style="width:68%;height:100%;background:#6F8466;border-radius:3px;"></div></div>
+            </div>
+            <span style="font-weight:800;font-size:13px;color:#6F8466;flex-shrink:0;">68%</span>
+          </div>
+        </div>
+      </div>
+      <div style="flex:1;">
+        <span style="display:inline-block;font-size:13px;font-weight:800;color:#D2552E;letter-spacing:.04em;">05</span>
+        <h3 style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:27px;letter-spacing:-.01em;margin:6px 0 10px;">Download from YouTube</h3>
+        <p style="font-size:17px;line-height:1.6;color:#5C4F42;max-width:440px;">If the song you want to learn is on YouTube, just drop in the URL and Rehearsal Room downloads the audio for you — ready to separate, slow down and loop.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── CTA ── -->
+  <section class="page-px" style="padding:24px 64px 64px;">
+    <div class="cta-inner" style="position:relative;overflow:hidden;background:linear-gradient(135deg,#D2552E,#B8431F);border-radius:24px;padding:56px 56px;text-align:center;box-shadow:0 30px 60px -28px rgba(184,67,31,.7);">
+      <div style="position:absolute;top:-40px;right:-20px;width:220px;height:220px;border-radius:50%;background:rgba(255,255,255,.08);pointer-events:none;"></div>
+      <div style="position:absolute;bottom:-60px;left:-30px;width:200px;height:200px;border-radius:50%;background:rgba(232,163,61,.18);pointer-events:none;"></div>
+      <div style="position:relative;">
+        <h2 style="font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:40px;letter-spacing:-.02em;color:#fff;">Ready to learn that song?</h2>
+        <p style="color:#FCE7DB;font-size:18px;margin:14px 0 30px;">Free, open source, and yours forever. Download the latest release and start practising tonight.</p>
+        <div style="display:flex;align-items:center;justify-content:center;gap:13px;flex-wrap:wrap;">
+          <a href="https://github.com/PatFox/RehearsalRoom/releases" class="btn-cta-primary">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4.5-4.5M12 15l4.5-4.5M4 19h16"/></svg>
+            Download for free
+          </a>
+          <a href="https://github.com/PatFox/RehearsalRoom" class="btn-cta-ghost">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.26c0 4.5 2.87 8.32 6.84 9.67.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05A9.4 9.4 0 0 1 12 6.84c.85 0 1.71.12 2.51.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.26C22 6.58 17.52 2 12 2z"/></svg>
+            Star on GitHub
+          </a>
+        </div>
+        <p style="color:#FAD8C7;font-size:13.5px;margin-top:18px;">Windows — no account required.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── FOOTER ── -->
+  <footer class="ftr-inner page-px" style="background:#241C15;color:#C9BBAA;padding:44px 64px;display:flex;justify-content:space-between;align-items:flex-start;gap:40px;">
+    <div style="max-width:300px;">
+      <div style="display:flex;align-items:center;gap:11px;margin-bottom:12px;">
+        <div style="width:34px;height:34px;border-radius:10px;background:#D2552E;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="8" width="3.4" height="8" rx="1.7" fill="#fff"/><rect x="10.3" y="3.5" width="3.4" height="17" rx="1.7" fill="#fff"/><rect x="17.6" y="10" width="3.4" height="4" rx="1.7" fill="#fff"/></svg>
+        </div>
+        <span style="font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:18px;color:#FBF4E8;">Rehearsal Room</span>
+      </div>
+      <p style="font-size:14px;line-height:1.55;">A free, open-source practice tool for musicians. Built by the community.</p>
+    </div>
+    <div class="ftr-links" style="display:flex;gap:64px;">
+      <div style="display:flex;flex-direction:column;gap:11px;">
+        <span style="color:#8C7C68;font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:2px;">Project</span>
+        <a href="https://github.com/PatFox/RehearsalRoom" class="ftr-link">GitHub repository</a>
+        <a href="https://github.com/PatFox/RehearsalRoom/releases" class="ftr-link">Releases</a>
+        <a href="https://github.com/PatFox/RehearsalRoom/issues" class="ftr-link">Report an issue</a>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:11px;">
+        <span style="color:#8C7C68;font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:2px;">Learn</span>
+        <a href="#video" class="ftr-link">Intro video</a>
+        <a href="#features" class="ftr-link">Features</a>
+        <a href="https://github.com/PatFox/RehearsalRoom/blob/main/LICENSE" class="ftr-link">MIT License</a>
+      </div>
+    </div>
+  </footer>
+
+</div><!-- /.wrap -->
+
+<script>
+  // Seeded waveform bars — direct port of the DCLogic.wave() function from the design source
+  function wave(w, h, color, count, seed) {
+    var s = seed;
+    function rnd() { s = (s * 9301 + 49297) % 233280; return s / 233280; }
+    var gap = 2;
+    var bw = (w - (count - 1) * gap) / count;
+    var rects = [];
+    for (var i = 0; i < count; i++) {
+      var env = 0.32 + 0.68 * Math.sin((i / (count - 1)) * Math.PI);
+      var amp = (0.12 + 0.88 * rnd()) * env;
+      var bh = Math.max(2, amp * h);
+      var x = i * (bw + gap);
+      var y = (h - bh) / 2;
+      var rx = Math.min(bw / 2, 2);
+      rects.push('<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) +
+        '" width="' + Math.max(bw, 1).toFixed(2) + '" height="' + bh.toFixed(2) +
+        '" rx="' + rx.toFixed(2) + '" fill="' + color + '"/>');
+    }
+    return '<svg viewBox="0 0 ' + w + ' ' + h +
+      '" width="100%" height="100%" preserveAspectRatio="none" style="display:block">' +
+      rects.join('') + '</svg>';
+  }
+
+  var WAVES = {
+    hero: wave(560, 96, '#D2552E', 84, 7),
+    vox:  wave(300, 28, '#D2552E', 56, 11),
+    drum: wave(300, 28, '#E0982F', 56, 23),
+    bass: wave(300, 28, '#6F8466', 56, 31),
+    oth:  wave(300, 28, '#8A6FA8', 56, 41),
+    loop: wave(520, 80, '#D2552E', 76, 53)
+  };
+
+  document.querySelectorAll('[data-wave]').forEach(function(el) {
+    var key = el.getAttribute('data-wave');
+    if (WAVES[key]) el.innerHTML = WAVES[key];
+  });
+</script>
+</body>
+</html>
