@@ -3,7 +3,11 @@
 ; Requires Inno Setup 6: https://jrsoftware.org/isdl.php
 
 #define AppName      "Rehearsal Room"
-#define AppVersion   "1.0.0"
+; AppVersion is passed from build.bat via /DAppVersion=x.y.z
+; This default is used when building manually with iscc directly.
+#ifndef AppVersion
+  #define AppVersion "1.0.0"
+#endif
 #define AppPublisher "PatFox"
 #define AppURL       "https://github.com/PatFox/RehearsalRoom"
 #define AppExeName   "RehearsalRoom.exe"
@@ -22,9 +26,7 @@ DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir=..\installer\output
 OutputBaseFilename=RehearsalRoom-v{#AppVersion}-Setup
-SetupIconFile=..\assets\icons\app.ico
-; Remove the above line if you don't have an icon yet:
-; SetupIconFile=
+; SetupIconFile=..\assets\icons\app.ico  (uncomment once app.ico is added)
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern

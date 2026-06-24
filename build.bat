@@ -54,10 +54,7 @@ if %ISCC%=="" (
 echo Building installer...
 if not exist installer\output mkdir installer\output
 
-REM Patch version number into the .iss file on the fly
-powershell -Command "(Get-Content installer\rehearsalroom.iss) -replace '#define AppVersion.*', '#define AppVersion   ""%VERSION%""' | Set-Content installer\rehearsalroom.iss"
-
-%ISCC% /Q installer\rehearsalroom.iss
+%ISCC% /Q "/DAppVersion=%VERSION%" installer\rehearsalroom.iss
 if errorlevel 1 (
     echo.
     echo INSTALLER BUILD FAILED. See output above.
