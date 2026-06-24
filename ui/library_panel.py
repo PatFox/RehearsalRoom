@@ -143,12 +143,16 @@ class SongRow(QFrame):
     clicked           = Signal(dict)
     favourite_toggled = Signal(str, bool)   # (song_id, is_now_favourite)
     delete_requested  = Signal(dict)        # song dict
+    archive_requested = Signal(dict)        # song dict
+    restore_requested = Signal(dict)        # archived song dict
 
-    def __init__(self, song: dict, theme: Theme, is_fav: bool = False, parent=None):
+    def __init__(self, song: dict, theme: Theme, is_fav: bool = False,
+                 archived: bool = False, parent=None):
         super().__init__(parent)
         self._song   = song
         self._theme  = theme
         self._is_fav = is_fav
+        self._archived = archived
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._setup_ui()
         self.apply_theme(theme)
@@ -159,13 +163,17 @@ class SongRow(QFrame):
         lay.setSpacing(10)
         s = self._song
 
-        # star
-        self._star_btn = QPushButton()
-        self._star_btn.setFixedSize(24, 24)
-        self._star_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._star_btn.setFlat(True)
-        self._star_btn.clicked.connect(self._on_star_clicked)
-        self._update_star()
+        # star (a plain 24px placeholder in archived mode — favourites N/A)
+        if self._archived:
+            self._star_btn = QWidget()
+            self._star_btn.setFixedSize(24, 24)
+        else:
+            self._star_btn = QPushButton()
+            self._star_btn.setFixedSize(24, 24)
+            self._star_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._star_btn.setFlat(True)
+            self._star_btn.clicked.connect(self._on_star_clicked)
+            self._update_star()
         lay.addWidget(self._star_btn)
 
         # artwork
@@ -248,9 +256,20 @@ class SongRow(QFrame):
             QMenu::item:selected {{ background: {t.surface2}; }}
         """)
 
-        delete_action = QAction("Delete track", self)
-        delete_action.triggered.connect(lambda: self.delete_requested.emit(self._song))
-        menu.addAction(delete_action)
+        if self._archived:
+            restore_action = QAction("Restore", self)
+            restore_action.triggered.connect(lambda: self.restore_requested.emit(self._song))
+            menu.addAction(restore_action)
+            delete_action = QAction("Delete permanently", self)
+            delete_action.triggered.connect(lambda: self.delete_requested.emit(self._song))
+            menu.addAction(delete_action)
+        else:
+            archive_action = QAction("Archive", self)
+            archive_action.triggered.connect(lambda: self.archive_requested.emit(self._song))
+            menu.addAction(archive_action)
+            delete_action = QAction("Delete track", self)
+            delete_action.triggered.connect(lambda: self.delete_requested.emit(self._song))
+            menu.addAction(delete_action)
 
         from PySide6.QtCore import QPoint
         btn_rect = self._more_btn.rect()
@@ -320,6 +339,8 @@ class SongRow(QFrame):
             self.setGraphicsEffect(None)
 
     def mousePressEvent(self, e):
+        if self._archived:
+            return   # archived rows aren't playable — use the ⋮ menu to restore
         if e.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit(self._song)
 
@@ -447,11 +468,14 @@ class LibraryPanel(QWidget):
     import_requested  = Signal()
     favourite_toggled = Signal(str, bool)
     delete_requested  = Signal(dict)   # song dict
+    archive_requested = Signal(dict)   # song dict
+    restore_requested = Signal(dict)   # archived song dict
 
     def __init__(self, theme: Theme, parent=None):
         super().__init__(parent)
         self._theme         = theme
         self._songs:    list[dict] = []
+        self._archived: list[dict] = []
         self._rows:     list[SongRow] = []
         self._favourites:   set[str] = set()
         self._last_viewed:  dict[str, float] = {}
@@ -472,6 +496,11 @@ class LibraryPanel(QWidget):
         self._songs = songs
         self._rebuild_rows()
 
+    def set_archived(self, archived: list[dict]):
+        self._archived = archived
+        if self._nav_filter == "archived":
+            self._rebuild_rows()
+
     def set_favourites(self, favs: set[str]):
         self._favourites = favs
         self._rebuild_rows()
@@ -487,10 +516,11 @@ class LibraryPanel(QWidget):
             "recent": "Recently played",
             "all":    "All tracks",
             "artist": "By artist",
+            "archived": "Archived",
         }
         self._head_lbl.setText(titles.get(nav_filter, "All tracks"))
         # Hide sort headers in artist view (grouped by artist, no sort)
-        self._col_head_w.setVisible(nav_filter != "artist")
+        self._col_head_w.setVisible(nav_filter not in ("artist", "archived"))
         self._rebuild_rows()
 
     def filter(self, query: str):
@@ -633,6 +663,22 @@ class LibraryPanel(QWidget):
         self._empty_fav.hide()
         cl.addWidget(self._empty_fav, 0, Qt.AlignmentFlag.AlignCenter)
 
+        # empty: no archived tracks
+        self._empty_archived = QWidget()
+        arl = QVBoxLayout(self._empty_archived)
+        arl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ar1 = QLabel("No archived tracks")
+        ar1.setStyleSheet("font-size: 17px; font-weight: 600;")
+        ar2 = QLabel("Archive a track from its ⋮ menu to free up space; "
+                     "it can be restored here later.")
+        ar2.setStyleSheet("font-size: 13px;")
+        ar2.setWordWrap(True)
+        ar2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        arl.addWidget(ar1, 0, Qt.AlignmentFlag.AlignHCenter)
+        arl.addWidget(ar2, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._empty_archived.hide()
+        cl.addWidget(self._empty_archived, 0, Qt.AlignmentFlag.AlignCenter)
+
         self._scroll.setWidget(self._content)
         root.addWidget(self._scroll)
 
@@ -664,6 +710,14 @@ class LibraryPanel(QWidget):
 
     def _visible_songs(self) -> list[dict]:
         songs = self._songs
+        if self._nav_filter == "archived":
+            songs = self._archived
+            if self._search_query:
+                q = self._search_query.lower()
+                songs = [s for s in songs if
+                         q in (s.get("title") or "").lower() or
+                         q in (s.get("artist") or "").lower()]
+            return songs
         if self._nav_filter == "artist":
             if self._search_query:
                 q = self._search_query.lower()
@@ -706,11 +760,14 @@ class LibraryPanel(QWidget):
         self._empty_recent.hide()
         self._empty_fav.hide()
         self._empty_artist.hide()
+        self._empty_archived.hide()
 
         if not songs:
             self._sep.hide()
             if self._nav_filter == "artist":
                 self._empty_artist.show()
+            elif self._nav_filter == "archived":
+                self._empty_archived.show()
             elif self._nav_filter == "fav":
                 self._empty_fav.show()
             elif self._nav_filter == "recent":
@@ -722,6 +779,17 @@ class LibraryPanel(QWidget):
             return
 
         self._sep.show()
+
+        if self._nav_filter == "archived":
+            self._art_by_path = {}
+            self._col_head_w.hide()
+            for song in songs:
+                row = SongRow(song, self._theme, archived=True)
+                row.restore_requested.connect(self.restore_requested)
+                row.delete_requested.connect(self.delete_requested)
+                self._rows_lay.addWidget(row)
+                self._rows.append(row)
+            return
 
         # Reset the per-rebuild art registry; collect tracks needing a lookup.
         self._art_by_path = {}
@@ -737,6 +805,7 @@ class LibraryPanel(QWidget):
                 row.clicked.connect(self.song_opened)
                 row.favourite_toggled.connect(self.favourite_toggled)
                 row.delete_requested.connect(self.delete_requested)
+                row.archive_requested.connect(self.archive_requested)
                 self._rows_lay.addWidget(row)
                 self._rows.append(row)
                 self._attach_cover(row._art, song, pending)
@@ -764,6 +833,7 @@ class LibraryPanel(QWidget):
                 row.clicked.connect(self.song_opened)
                 row.favourite_toggled.connect(self.favourite_toggled)
                 row.delete_requested.connect(self.delete_requested)
+                row.archive_requested.connect(self.archive_requested)
                 self._rows_lay.addWidget(row)
                 self._rows.append(row)
                 self._attach_cover(row._art, song, pending)

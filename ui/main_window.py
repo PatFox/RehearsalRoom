@@ -360,6 +360,7 @@ class Sidebar(QFrame):
             ("recent",  "⏱", "Recent", -1),
             ("fav",     "☆", "Favorites", -1),
             ("artist",  "♪", "By artist", -1),
+            ("archived", "🗄", "Archived", -1),
         ]:
             btn = SidebarButton(icon, label, cnt)
             btn.clicked.connect(lambda checked, k=key: self._on_nav(k))
@@ -443,6 +444,10 @@ class Sidebar(QFrame):
 
     def update_count(self, n: int):
         self._nav_buttons["library"].set_count(n)
+
+    def set_nav_count(self, key: str, n: int):
+        if key in self._nav_buttons:
+            self._nav_buttons[key].set_count(n)
 
     def refresh_storage(self, library_path, n_tracks: int):
         from core.library_stats import library_total_bytes, fmt_size
@@ -667,6 +672,8 @@ class MainWindow(QMainWindow):
         self._library.import_requested.connect(self._open_import)
         self._library.favourite_toggled.connect(self._on_favourite_toggled)
         self._library.delete_requested.connect(self._on_delete_track)
+        self._library.archive_requested.connect(self._on_archive_track)
+        self._library.restore_requested.connect(self._on_restore_archived)
         self._library.set_songs(self._songs)
         self._library.set_favourites(self._favourites)
         self._library.set_last_viewed(self._last_viewed)
@@ -752,9 +759,13 @@ class MainWindow(QMainWindow):
             "recent":  "Recently played",
             "fav":     "Favourites",
             "artist":  "By artist",
+            "archived": "Archived",
         }
         self._topbar_title.setText(nav_names.get(key, "Library"))
-        self._library.set_nav_filter(key if key in ("fav", "recent", "artist") else "all")
+        if key == "archived":
+            from core.archive import list_archived
+            self._library.set_archived(list_archived())
+        self._library.set_nav_filter(key if key in ("fav", "recent", "artist", "archived") else "all")
 
     def _on_search(self, text: str):
         self._library.filter(text)
@@ -766,6 +777,7 @@ class MainWindow(QMainWindow):
             self._favourites.discard(song_id)
         S.set_favourites(self._favourites)
         self._library.set_favourites(self._favourites)
+        self._refresh_nav_counts()
 
     # ------------------------------------------------------------------
     # Import
@@ -1001,6 +1013,15 @@ class MainWindow(QMainWindow):
         self._library.set_songs(self._songs)
         self._refresh_counts()
 
+        # If this was a restore from the archive, remove the .rrs now.
+        arch_src = job.get("archive_src")
+        if arch_src:
+            try:
+                os.remove(arch_src)
+            except OSError:
+                pass
+            self._refresh_archived()
+
         self._pending_job = None
         self._last_imported_song = new_song
         self._process_next_job()
@@ -1122,6 +1143,13 @@ class MainWindow(QMainWindow):
         n = len(self._songs)
         self._sidebar.update_count(n)
         self._sidebar.refresh_storage(S.library_path(), n)
+        self._refresh_nav_counts()
+
+    def _refresh_nav_counts(self):
+        fav = sum(1 for s in self._songs if s.get("id") in self._favourites)
+        self._sidebar.set_nav_count("fav", fav)
+        from core.archive import list_archived
+        self._sidebar.set_nav_count("archived", len(list_archived()))
 
     def _show_more_menu(self):
         t = self._theme
@@ -1169,7 +1197,63 @@ class MainWindow(QMainWindow):
         pos = self._more_btn.mapToGlobal(btn_rect.bottomRight())
         menu.exec(QPoint(pos.x() - menu.sizeHint().width(), pos.y() + 4))
 
+    def _refresh_archived(self):
+        """Reload the Archived view if it's the one currently shown."""
+        from core.archive import list_archived
+        self._library.set_archived(list_archived())
+        self._refresh_nav_counts()
+
+    def _on_archive_track(self, song: dict):
+        stems_path = song.get("stems_path")
+        if not stems_path:
+            return
+        from core.archive import archive_track
+        try:
+            archive_track(stems_path)
+        except Exception as exc:
+            _ErrorDialog(
+                f"Could not archive this track:\n\n{exc}", self).exec()
+            return
+        # Drop it from the live library (its .stems is gone).
+        song_id = song.get("id")
+        self._songs = [s for s in self._songs if s.get("id") != song_id]
+        self._favourites.discard(song_id or "")
+        self._last_viewed.pop(song_id or "", None)
+        from core import settings as S
+        S.set_favourites(self._favourites)
+        self._library.set_songs(self._songs)
+        self._library.set_favourites(self._favourites)
+        self._refresh_counts()
+        self._refresh_archived()
+
+    def _on_restore_archived(self, arch: dict):
+        rrs = arch.get("rrs_path")
+        if not rrs:
+            return
+        # Re-import the template the normal way; delete the .rrs once it lands.
+        job = {"kind": "template", "path": rrs, "model": "htdemucs",
+               "name": arch.get("title", ""), "archive_src": rrs}
+        self._on_import_started([job])
+
     def _on_delete_track(self, song: dict):
+        # Archived tracks: permanently delete the .rrs file.
+        rrs = song.get("rrs_path")
+        if rrs:
+            dlg = _DeleteConfirmDialog(song.get("title") or "this track", self._theme, self)
+
+            def do_archive_delete():
+                try:
+                    import os
+                    os.remove(rrs)
+                except OSError as exc:
+                    _ErrorDialog(f"Could not delete file:\n\n{exc}", self).exec()
+                    return
+                self._refresh_archived()
+
+            dlg.confirmed.connect(do_archive_delete)
+            dlg.exec()
+            return
+
         title = song.get("title") or "this track"
         dlg = _DeleteConfirmDialog(title, self._theme, self)
 
