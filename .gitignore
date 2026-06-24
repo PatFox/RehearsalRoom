@@ -45,3 +45,4 @@ bin/fpcalc.exe
 # Release build state (local only)
 .version
 installer/output/
+.claude/
