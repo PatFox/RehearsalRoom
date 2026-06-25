@@ -325,7 +325,10 @@ class WaveformWidget(TimelineCoords, QWidget):
         self.update()
 
     def set_progress(self, p: float):
-        if abs(p - self._progress) > 0.0005:
+        # Repaint on any change so the playhead glides as smoothly as the tab
+        # timeline. (A fraction-based threshold here meant ~120 ms steps on a
+        # long song — the playhead visibly lagged and jerked.)
+        if p != self._progress:
             self._progress = p
             self.update()
 
@@ -405,16 +408,13 @@ class WaveformWidget(TimelineCoords, QWidget):
 
         # --- playhead line ---
         if 0.0 <= play_x <= w:
-            # Solid black, 2px. Snap x to a whole pixel and draw this one line
-            # with antialiasing off, otherwise AA spreads the 2px coverage
-            # across columns and the line reads as grey.
+            # Solid black, 2px, drawn at the exact (fractional) x with
+            # antialiasing on so it glides sub-pixel as smoothly as the tab
+            # playhead, rather than snapping to whole pixels.
             pen = QPen(QColor(0, 0, 0))
             pen.setWidth(2)
             painter.setPen(pen)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-            px = round(play_x)
-            painter.drawLine(QPointF(px, 0), QPointF(px, h))
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.drawLine(QPointF(play_x, 0), QPointF(play_x, h))
 
         # --- loop region ---
         ls, le = self._loop_start, self._loop_end
