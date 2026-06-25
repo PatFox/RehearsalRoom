@@ -405,8 +405,16 @@ class WaveformWidget(TimelineCoords, QWidget):
 
         # --- playhead line ---
         if 0.0 <= play_x <= w:
-            painter.setPen(QColor(180, 180, 180, 220))
-            painter.drawLine(QPointF(play_x, 0), QPointF(play_x, h))
+            # Solid black, 2px. Snap x to a whole pixel and draw this one line
+            # with antialiasing off, otherwise AA spreads the 2px coverage
+            # across columns and the line reads as grey.
+            pen = QPen(QColor(0, 0, 0))
+            pen.setWidth(2)
+            painter.setPen(pen)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            px = round(play_x)
+            painter.drawLine(QPointF(px, 0), QPointF(px, h))
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         # --- loop region ---
         ls, le = self._loop_start, self._loop_end
