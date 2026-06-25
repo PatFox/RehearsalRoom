@@ -1179,7 +1179,10 @@ class TabEditorPanel(QFrame):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 8, 12, 8)
+        # No horizontal margins: the timeline must span the same left edge and
+        # width as the lanes/ruler above it (all gutter-244) so the tab playhead
+        # and bar grid stay aligned with the waveforms at every zoom level.
+        root.setContentsMargins(0, 8, 0, 8)
         root.setSpacing(8)
 
         # No toolbar buttons: tabs are created from each lane's "Tab" button;
