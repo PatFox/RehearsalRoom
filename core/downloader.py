@@ -1,12 +1,26 @@
 """yt-dlp YouTube audio downloader (runs in a QThread)."""
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _clean_error(msg: str) -> str:
+    """Strip yt-dlp's ANSI colour codes and its 'ERROR:' prefix for display."""
+    msg = _ANSI_RE.sub("", str(msg)).strip()
+    return re.sub(r"^ERROR:\s*", "", msg)
+
+
+def _is_age_restricted(msg: str) -> bool:
+    m = msg.lower()
+    return "confirm your age" in m or "age-restricted" in m or "inappropriate for some" in m
 
 
 def _get_ffmpeg() -> tuple[str, str]:
@@ -90,6 +104,7 @@ def fetch_audio(url, output_dir=None, progress=None, on_info=None, should_cancel
         "outtmpl": raw_template,
         "quiet": True,
         "no_warnings": False,
+        "no_color": True,          # don't leak ANSI colour codes into messages
         "socket_timeout": 30,
         "retries": 5,
         "fragment_retries": 5,
@@ -98,9 +113,32 @@ def fetch_audio(url, output_dir=None, progress=None, on_info=None, should_cancel
         "logger": _Logger(),
     }
 
+    from yt_dlp.utils import DownloadError as _YtDLError
+
+    def _run(extra: dict | None = None) -> dict:
+        opts = {**ydl_opts, **(extra or {})}
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            return ydl.extract_info(url, download=True) or {}
+
     _progress(10, "Fetching audio info…")
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        yt_info = ydl.extract_info(url, download=True) or {}
+    try:
+        yt_info = _run()
+    except _YtDLError as exc:
+        msg = _clean_error(exc)
+        if _is_age_restricted(msg):
+            # Best effort: some age-restricted videos are still reachable via
+            # YouTube's embedded players, which don't require sign-in.
+            try:
+                yt_info = _run({"extractor_args":
+                               {"youtube": {"player_client":
+                                            ["tv_embedded", "web_embedded", "default"]}}})
+            except _YtDLError:
+                raise DownloadError(
+                    "This video is age-restricted and YouTube requires signing "
+                    "in to download it, so it can't be fetched automatically.\n\n"
+                    "Try a different source for this track.")
+        else:
+            raise DownloadError(msg)
 
     if not yt_info:
         detail = "\n".join(_ydl_errors) if _ydl_errors else "No details available."
@@ -165,6 +203,11 @@ class DownloaderWorker(QThread):
             self.finished.emit(wav_path, yt_info)
         except _Cancelled:
             return   # cancelled — exit quietly, emit nothing
+        except DownloadError as exc:
+            if self.isInterruptionRequested():
+                return   # error caused by teardown during cancel — ignore
+            # Already a clean, user-facing message — no traceback needed.
+            self.error.emit(str(exc))
         except Exception as exc:
             if self.isInterruptionRequested():
                 return   # error caused by teardown during cancel — ignore
