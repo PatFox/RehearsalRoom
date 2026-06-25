@@ -1597,6 +1597,11 @@ class PlayerPanel(QWidget):
         self._tick_timer.stop()
         self._update_progress(0.0)
 
+    def stop_playback(self):
+        """Public: halt playback and reset the transport (e.g. when the user
+        leaves the player for the library)."""
+        self._stop()
+
     def _seek(self, progress: float, user_initiated: bool = False):
         self._time_ms = progress * self._duration
         self._disp_ms = self._time_ms     # snap the smoothed clock, no glide

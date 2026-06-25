@@ -713,6 +713,9 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _go_library(self):
+        # Stop playback when leaving the player — otherwise audio keeps playing
+        # over the library view.
+        self._player.stop_playback()
         self._stack.setCurrentIndex(0)
         self._topbar.show()
         self._sidebar.show()
