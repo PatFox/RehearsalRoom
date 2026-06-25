@@ -291,10 +291,10 @@ class TabTimeline(TimelineCoords, QWidget):
         if self._track and self._track.bars:
             self._paint_bars(p)
 
-        # playhead
+        # playhead — solid black, 2px, to match the waveform playhead
         px = self._x_for_ms(self._progress * self._duration)
         if GUTTER_W <= px <= w:
-            p.setPen(QPen(QColor(180, 180, 180, 220), 1))
+            p.setPen(QPen(QColor(0, 0, 0), 2))
             p.drawLine(QPointF(px, 0), QPointF(px, h))
 
         p.setClipping(False)
