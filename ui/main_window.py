@@ -5,7 +5,7 @@ from PySide6.QtGui import QColor, QPalette, QFont, QAction
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QPushButton, QFrame, QLineEdit, QStackedWidget,
-    QSizePolicy, QDialog, QMenu
+    QSizePolicy, QDialog, QMenu, QScrollArea, QApplication
 )
 
 from ui.theme import Theme, STEM_IDS
@@ -74,7 +74,20 @@ class _ErrorDialog(QDialog):
         """)
         self._text.setCursor(Qt.CursorShape.PointingHandCursor)
         self._text.mousePressEvent = lambda e: self._copy()
-        lay.addWidget(self._text)
+        self._text.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        # Cap the text area's height (relative to the screen) and scroll when a
+        # long error would otherwise push the dialog past the bottom edge.
+        screen = (parent.screen() if parent else None) or QApplication.primaryScreen()
+        avail_h = screen.availableGeometry().height() if screen else 800
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setMaximumHeight(max(160, int(avail_h * 0.55)))
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        scroll.setWidget(self._text)
+        lay.addWidget(scroll)
 
         self._confirm = QLabel("")
         self._confirm.setStyleSheet("font-size: 12px; color: #0E9F6E; font-weight: 600;")
