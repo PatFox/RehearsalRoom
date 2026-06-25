@@ -9,6 +9,7 @@ Output: dist/RehearsalRoom/RehearsalRoom.exe  (plus supporting files)
 
 import sys
 import os
+import re
 from pathlib import Path
 import imageio_ffmpeg
 
@@ -20,6 +21,22 @@ torch_datas,   torch_binaries,   torch_hiddenimports   = collect_all('torch')
 demucs_datas,  demucs_binaries,  demucs_hiddenimports  = collect_all('demucs')
 torchaudio_d,  torchaudio_b,     torchaudio_h          = collect_all('torchaudio')
 numpy_datas,   numpy_binaries,   numpy_hiddenimports   = collect_all('numpy')
+
+# ── Size trim #1: drop compile-time-only static libs (*.lib) ─────────────────
+# collect_all('torch') sweeps in ~46 MB of .lib files (torch_cpu.lib, sleef.lib,
+# XNNPACK.lib, …). These are link-time artifacts and are never loaded at runtime.
+def _drop_static_libs(pairs):
+    return [(src, dest) for (src, dest) in pairs
+            if not str(src).lower().endswith('.lib')]
+
+torch_binaries = _drop_static_libs(torch_binaries)
+torch_datas    = _drop_static_libs(torch_datas)
+torchaudio_b   = _drop_static_libs(torchaudio_b)
+torchaudio_d   = _drop_static_libs(torchaudio_d)
+numpy_binaries = _drop_static_libs(numpy_binaries)
+numpy_datas    = _drop_static_libs(numpy_datas)
+demucs_binaries = _drop_static_libs(demucs_binaries)
+demucs_datas    = _drop_static_libs(demucs_datas)
 
 # ── paths ──────────────────────────────────────────────────────────────────
 SPEC_DIR   = os.path.dirname(os.path.abspath(SPEC))          # project root
@@ -117,6 +134,26 @@ a = Analysis(
         'setuptools',
         'pip',
         'caffe2',
+        # Size trim #2: numba + llvmlite (~102 MB) — transitive optional dep,
+        # not imported by our code or the demucs/torchaudio separation chain.
+        'numba',
+        'llvmlite',
+        # Size trim #4: scipy (~73 MB) — only referenced by bundled test files
+        # and torch training-only paths; never on the separation code path.
+        'scipy',
+        # Size trim #3: Qt modules we don't use (pure QtWidgets app).
+        'PySide6.QtQuick',
+        'PySide6.QtQml',
+        'PySide6.QtQuickWidgets',
+        'PySide6.QtQuickControls2',
+        'PySide6.QtPdf',
+        'PySide6.QtPdfWidgets',
+        'PySide6.QtWebEngineCore',
+        'PySide6.QtWebEngineWidgets',
+        'PySide6.QtMultimedia',
+        'PySide6.Qt3DCore',
+        'PySide6.QtCharts',
+        'PySide6.QtDataVisualization',
     ],
 
     win_no_prefer_redirects=False,
@@ -124,6 +161,24 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+
+# ── Size trim #3 (cont.): strip bundled Qt binaries/data we don't use ────────
+# Module excludes above stop Python imports, but PyInstaller's PySide6 hook
+# still copies these DLLs and the full translations folder. Drop them by name.
+#   opengl32sw.dll  — 20 MB software OpenGL fallback (native rendering is used)
+#   Qt6Quick/Qml    — QML runtime (pure QtWidgets app)
+#   Qt6Pdf          — PDF *viewer* (QPdfWriter we use lives in QtGui)
+#   translations    — Qt's own .qm files for ~40 languages (English-only UI)
+_QT_DROP = re.compile(
+    r'(opengl32sw\.dll'
+    r'|Qt6?Quick|Qt6?Qml'
+    r'|Qt6?Pdf|Qt6?WebEngine|Qt6?Multimedia'
+    r'|Qt6?3D|Qt6?Charts|Qt6?DataVisualization'
+    r'|[\\/]translations[\\/])',
+    re.IGNORECASE,
+)
+a.binaries = [b for b in a.binaries if not _QT_DROP.search(b[0])]
+a.datas    = [d for d in a.datas    if not _QT_DROP.search(d[0])]
 
 # ── PYZ archive ────────────────────────────────────────────────────────────
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
