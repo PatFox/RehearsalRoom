@@ -70,4 +70,13 @@ def main():
 
 
 if __name__ == "__main__":
+    # MUST be the first thing in the entry point. In a frozen app, multiprocessing
+    # uses the 'spawn' start method (always on macOS) which re-launches the
+    # executable — i.e. this .app. Without freeze_support() the relaunched child
+    # falls through to main() and opens a second GUI window/instance instead of
+    # acting as a worker. (Triggered by multiprocessing inside bundled libs like
+    # torch/numpy during separation.)
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     main()
