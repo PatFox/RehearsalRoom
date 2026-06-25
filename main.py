@@ -35,6 +35,11 @@ def main():
     from core.tempdirs import sweep_stale
     sweep_stale()
 
+    # Prefer a user-updated yt-dlp over the bundled copy, if one was downloaded.
+    # Must run before anything imports yt_dlp (the downloader imports it lazily).
+    from core import ytdlp_updater
+    ytdlp_updater.activate()
+
     app = QApplication(sys.argv)
     app.setApplicationName("Rehearsal Room")
     app.setApplicationVersion("0.1.0")

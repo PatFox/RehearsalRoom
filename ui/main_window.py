@@ -570,6 +570,21 @@ class _TrackLoadWorker(QThread):
             self.error.emit(f"{exc}\n\n{traceback.format_exc()}")
 
 
+class _YtDlpUpdateWorker(QThread):
+    """Downloads the latest yt-dlp wheel off the UI thread."""
+    progress = Signal(int, str)
+    done = Signal(bool, str)   # changed, message
+
+    def run(self):
+        try:
+            from core import ytdlp_updater
+            changed, message, _ = ytdlp_updater.update(
+                progress=lambda p, m: self.progress.emit(p, m))
+            self.done.emit(changed, message)
+        except Exception as exc:
+            self.done.emit(False, f"Update failed:\n\n{exc}")
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -600,6 +615,7 @@ class MainWindow(QMainWindow):
         # Keep references to retired-but-not-yet-finished threads so Python
         # never garbage-collects a QThread whose C++ thread is still alive.
         self._retired_workers: list = []
+        self._ytdlp_worker = None
 
         self._setup_ui()
         self._apply_theme()
@@ -1185,6 +1201,10 @@ class MainWindow(QMainWindow):
         check_action.triggered.connect(self._check_for_updates)
         menu.addAction(check_action)
 
+        ytdlp_action = QAction("Update YouTube downloader…", self)
+        ytdlp_action.triggered.connect(self._update_ytdlp)
+        menu.addAction(ytdlp_action)
+
         menu.addSeparator()
 
         about_action = QAction("About", self)
@@ -1314,6 +1334,35 @@ class MainWindow(QMainWindow):
         self._update_checker.result.connect(on_result)
         self._update_checker.error.connect(on_error)
         self._update_checker.start()
+
+    def _update_ytdlp(self):
+        """Download the latest yt-dlp so YouTube imports keep working between
+        app releases (YouTube changes break frozen yt-dlp versions)."""
+        from PySide6.QtWidgets import QProgressDialog, QMessageBox
+
+        dlg = QProgressDialog("Checking for yt-dlp updates…", None, 0, 100, self)
+        dlg.setWindowTitle("YouTube downloader")
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setCancelButton(None)      # the download is short; no cancel
+        dlg.setAutoClose(False)
+        dlg.setValue(0)
+
+        self._ytdlp_worker = _YtDlpUpdateWorker(self)
+
+        def on_progress(pct, msg):
+            dlg.setValue(pct)
+            dlg.setLabelText(msg)
+
+        def on_done(changed, message):
+            dlg.close()
+            worker, self._ytdlp_worker = self._ytdlp_worker, None
+            self._retire_worker(worker)
+            QMessageBox.information(self, "YouTube downloader", message)
+
+        self._ytdlp_worker.progress.connect(on_progress)
+        self._ytdlp_worker.done.connect(on_done)
+        self._ytdlp_worker.start()
 
     def _open_about(self):
         AboutDialog(self._theme, self).exec()

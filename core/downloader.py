@@ -42,7 +42,14 @@ def fetch_audio(url, output_dir=None, progress=None, on_info=None, should_cancel
     on_info(title:str, artist:str) — optional, fired once metadata is known
     should_cancel() -> bool     — optional cooperative-cancel check
     """
-    import yt_dlp
+    try:
+        import yt_dlp
+    except Exception:
+        # A user-updated wheel failed to import (e.g. needs an unbundled dep).
+        # Fall back to the bundled copy so downloads still work.
+        from core import ytdlp_updater
+        ytdlp_updater.deactivate()
+        import yt_dlp
 
     if output_dir is None:
         from core.tempdirs import make_temp_dir
