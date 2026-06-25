@@ -11,11 +11,17 @@ from pathlib import Path
 block_cipher = None
 
 # Collect entire packages whose internals PyInstaller can't trace statically.
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 torch_d,    torch_b,    torch_h    = collect_all('torch')
 demucs_d,   demucs_b,   demucs_h   = collect_all('demucs')
 torchaudio_d, torchaudio_b, torchaudio_h = collect_all('torchaudio')
 numpy_d,    numpy_b,    numpy_h    = collect_all('numpy')
+
+# certifi's cacert.pem — bundled so HTTPS works without the OS trust store.
+# Critical on macOS: the embedded Python can't reach the keychain, so model
+# downloads (torch.hub) and yt-dlp fail with CERTIFICATE_VERIFY_FAILED without
+# this (see hooks/rthook_ssl_certs.py).
+certifi_datas = collect_data_files('certifi')
 
 # ── Size trim #1: drop compile-time-only static libs (*.a) ───────────────────
 # collect_all('torch') sweeps in static archives that are link-time artifacts
@@ -55,6 +61,7 @@ a = Analysis(
         *demucs_d,
         *torchaudio_d,
         *numpy_d,
+        *certifi_datas,
         (os.path.join(SPEC_DIR, '..', 'core'), 'core'),
         (os.path.join(SPEC_DIR, '..', 'ui'),   'ui'),
         *([( os.path.join(SPEC_DIR, '..', 'assets'), 'assets')]
@@ -72,10 +79,11 @@ a = Analysis(
         'yt_dlp', 'yt_dlp.extractor', 'yt_dlp.extractor.youtube',
         'yt_dlp.postprocessor',
         'numpy', 'einops', 'julius', 'tqdm',
-        'mutagen', 'acoustid', 'imageio_ffmpeg',
+        'mutagen', 'acoustid', 'imageio_ffmpeg', 'certifi',
     ],
 
     runtime_hooks=[
+        os.path.join(SPEC_DIR, '..', 'hooks', 'rthook_ssl_certs.py'),
         os.path.join(SPEC_DIR, '..', 'hooks', 'rthook_numpy_compat.py'),
     ],
 

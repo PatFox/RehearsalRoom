@@ -16,11 +16,15 @@ import imageio_ffmpeg
 block_cipher = None
 
 # Collect entire packages whose internal imports PyInstaller can't trace statically.
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 torch_datas,   torch_binaries,   torch_hiddenimports   = collect_all('torch')
 demucs_datas,  demucs_binaries,  demucs_hiddenimports  = collect_all('demucs')
 torchaudio_d,  torchaudio_b,     torchaudio_h          = collect_all('torchaudio')
 numpy_datas,   numpy_binaries,   numpy_hiddenimports   = collect_all('numpy')
+
+# certifi's cacert.pem — bundled so HTTPS works without the OS trust store
+# (see hooks/rthook_ssl_certs.py).
+certifi_datas = collect_data_files('certifi')
 
 # ── Size trim #1: drop compile-time-only static libs (*.lib) ─────────────────
 # collect_all('torch') sweeps in ~46 MB of .lib files (torch_cpu.lib, sleef.lib,
@@ -61,6 +65,7 @@ a = Analysis(
         *demucs_datas,
         *torchaudio_d,
         *numpy_datas,
+        *certifi_datas,
         # Application source packages (needed so relative imports resolve)
         (os.path.join(SPEC_DIR, 'core'), 'core'),
         (os.path.join(SPEC_DIR, 'ui'),   'ui'),
@@ -115,11 +120,13 @@ a = Analysis(
         'mutagen',
         'acoustid',
         'imageio_ffmpeg',
+        'certifi',
     ],
 
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[
+        os.path.join(SPEC_DIR, 'hooks', 'rthook_ssl_certs.py'),
         os.path.join(SPEC_DIR, 'hooks', 'rthook_numpy_compat.py'),
     ],
 
