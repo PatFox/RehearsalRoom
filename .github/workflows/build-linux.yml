@@ -1,0 +1,128 @@
+name: Build Linux Release
+
+# Triggers whenever release.bat pushes a version tag (e.g. v1.0.0)
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-linux:
+    # Build on an older Ubuntu for broader glibc compatibility — a binary
+    # linked against newer glibc won't run on older distros (but will on newer).
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # System libraries Qt's xcb platform plugin links against (needed so
+      # PyInstaller can introspect PySide6 during the build).
+      - name: Install system Qt dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libdbus-1-3 \
+            libxcb-cursor0 libxcb-xinerama0
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install \
+            PySide6 \
+            numpy \
+            demucs \
+            torch torchaudio \
+            soundfile sounddevice \
+            yt-dlp imageio-ffmpeg \
+            mutagen pyacoustid \
+            pyinstaller
+
+      - name: Build with PyInstaller
+        run: pyinstaller installer/rehearsalroom_linux.spec
+
+      # ── Tarball ────────────────────────────────────────────────────────
+      - name: Create tarball
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"   # strip leading 'v'
+          tar -C dist -czf "dist/RehearsalRoom-v${VERSION}-linux-x86_64.tar.gz" RehearsalRoom
+
+      # ── AppImage ───────────────────────────────────────────────────────
+      - name: Build AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1   # GitHub runners lack FUSE
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+
+          # Assemble the AppDir from the PyInstaller one-folder output.
+          APPDIR=RehearsalRoom.AppDir
+          mkdir -p "$APPDIR/usr/bin"
+          cp -r dist/RehearsalRoom/. "$APPDIR/usr/bin/"
+
+          # AppRun launches the bundled executable.
+          cat > "$APPDIR/AppRun" <<'EOF'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/usr/bin/RehearsalRoom" "$@"
+          EOF
+          chmod +x "$APPDIR/AppRun"
+
+          # Desktop entry.
+          cat > "$APPDIR/RehearsalRoom.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Rehearsal Room
+          Exec=RehearsalRoom
+          Icon=RehearsalRoom
+          Categories=AudioVideo;Audio;
+          Terminal=false
+          EOF
+
+          # Icon: use a bundled PNG if present, otherwise generate a placeholder
+          # (appimagetool requires an icon matching the desktop entry's Icon=).
+          ICON_SRC=$(find assets -iname '*.png' 2>/dev/null | head -n1 || true)
+          if [ -n "$ICON_SRC" ]; then
+            cp "$ICON_SRC" "$APPDIR/RehearsalRoom.png"
+          else
+            python - <<'PY'
+          import struct, zlib
+          w = h = 256
+          px = bytes((0xD2, 0x55, 0x2E))          # brand orange, opaque
+          row = b'\x00' + (px + b'\xff') * w       # filter byte + RGBA pixels
+          raw = row * h
+          def chunk(tag, data):
+              return (struct.pack('>I', len(data)) + tag + data
+                      + struct.pack('>I', zlib.crc32(tag + data) & 0xffffffff))
+          png = (b'\x89PNG\r\n\x1a\n'
+                 + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 6, 0, 0, 0))
+                 + chunk(b'IDAT', zlib.compress(raw, 9))
+                 + chunk(b'IEND', b''))
+          open('RehearsalRoom.AppDir/RehearsalRoom.png', 'wb').write(png)
+          PY
+          fi
+
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+          ARCH=x86_64 ./appimagetool-x86_64.AppImage "$APPDIR" \
+            "dist/RehearsalRoom-v${VERSION}-x86_64.AppImage"
+
+      # ── Upload both artifacts to the GitHub Release ────────────────────
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          # The release was already created by release.bat on Windows;
+          # this step attaches the Linux artifacts to it.
+          files: |
+            dist/RehearsalRoom-v*-linux-x86_64.tar.gz
+            dist/RehearsalRoom-v*-x86_64.AppImage
+          fail_on_unmatched_files: true

@@ -8,6 +8,10 @@ __pycache__/
 dist/
 build/
 *.spec
+# …except our hand-maintained PyInstaller specs (one per platform).
+!rehearsalroom.spec
+!installer/rehearsalroom_mac.spec
+!installer/rehearsalroom_linux.spec
 .venv/
 venv/
 env/
