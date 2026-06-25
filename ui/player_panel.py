@@ -280,11 +280,15 @@ class PlayheadOverlay(QWidget):
     def paintEvent(self, e):
         p = QPainter(self)
         x = int(self._progress * self.width())
-        col = QColor(self._color)
-        p.setPen(col)
-        p.setBrush(col)
+        # Playhead line: solid black, 2px wide.
+        pen = QPen(QColor(0, 0, 0))
+        pen.setWidth(2)
+        p.setPen(pen)
         p.drawLine(x, 0, x, self.height())
-        # dot at top
+        # dot at top (themed playhead colour)
+        col = QColor(self._color)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(col)
         p.drawEllipse(x - 5, -1, 11, 11)
         p.end()
 
