@@ -525,15 +525,38 @@ class _FootswitchFilter(QObject):
         self._panel = player_panel
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.KeyPress and S.get("vidami_enabled"):
-            # Don't intercept when a text input has focus
-            from PySide6.QtWidgets import QApplication, QLineEdit, QTextEdit, QPlainTextEdit
+        if event.type() == QEvent.Type.KeyPress:
+            # Don't intercept when a text input has focus.
+            from PySide6.QtWidgets import (QApplication, QLineEdit, QTextEdit,
+                                           QPlainTextEdit, QComboBox)
             focused = QApplication.focusWidget()
             if isinstance(focused, (QLineEdit, QTextEdit, QPlainTextEdit)):
                 return False
-            char = event.text()
-            if char in _VIDAMI_CHARS:
-                if self._panel.handle_footswitch(char):
+            if isinstance(focused, QComboBox) and focused.isEditable():
+                return False
+
+            # Space always toggles play/pause while focus is anywhere inside the
+            # player, regardless of which control last had focus — otherwise the
+            # focused QPushButton would treat Space as a click ("toggles the
+            # last button"). Scoping to the player's own subtree means a modal
+            # dialog opened over it (error/settings/export) still gets Space for
+            # its own focused button. Ignore auto-repeat and modifier combos.
+            plain = not (event.modifiers() & (
+                Qt.KeyboardModifier.ControlModifier
+                | Qt.KeyboardModifier.AltModifier
+                | Qt.KeyboardModifier.MetaModifier))
+            in_player = focused is not None and (
+                focused is self._panel or self._panel.isAncestorOf(focused))
+            if (event.key() == Qt.Key.Key_Space and plain
+                    and not event.isAutoRepeat() and in_player
+                    and self._panel.isVisible()):
+                self._panel.toggle_play()
+                return True   # consumed — don't let the focused button see it
+
+            # Vidami footswitch routing (only when enabled).
+            if S.get("vidami_enabled"):
+                char = event.text()
+                if char in _VIDAMI_CHARS and self._panel.handle_footswitch(char):
                     return True   # consumed — don't propagate
         return False
 

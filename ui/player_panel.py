@@ -1602,6 +1602,10 @@ class PlayerPanel(QWidget):
         leaves the player for the library)."""
         self._stop()
 
+    def toggle_play(self):
+        """Public: toggle play/pause (used by the global spacebar handler)."""
+        self._toggle_play()
+
     def _seek(self, progress: float, user_initiated: bool = False):
         self._time_ms = progress * self._duration
         self._disp_ms = self._time_ms     # snap the smoothed clock, no glide
