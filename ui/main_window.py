@@ -193,13 +193,34 @@ class _UpToDateDialog(QDialog):
         lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignRight)
 
 
+class _VersionFetchWorker(QThread):
+    """Fetches the installed + latest stable/nightly yt-dlp versions off the
+    UI thread (the latest versions are a network call to PyPI)."""
+    done = Signal(dict)   # {"installed":..., "stable":..., "nightly":...}
+
+    def run(self):
+        from core import ytdlp_updater
+        result = {"installed": None, "stable": None, "nightly": None}
+        try:
+            result["installed"] = ytdlp_updater.active_version()
+        except Exception:
+            pass
+        try:
+            result.update(ytdlp_updater.latest_versions())
+        except Exception:
+            pass
+        self.done.emit(result)
+
+
 class _YtDlpChannelDialog(QDialog):
-    """Choose which yt-dlp release channel to update from."""
+    """Choose which yt-dlp release channel to update from. Shows the installed
+    version and each channel's latest, with a green tick where they match."""
 
     def __init__(self, theme: Theme, parent=None):
         super().__init__(parent)
+        self._theme = theme
         self.setWindowTitle("Update YouTube downloader")
-        self.setFixedWidth(420)
+        self.setFixedWidth(440)
         self.setModal(True)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(26, 22, 26, 22)
@@ -209,17 +230,31 @@ class _YtDlpChannelDialog(QDialog):
         title.setStyleSheet("font-size: 16px; font-weight: 600;")
         lay.addWidget(title)
 
+        self._installed_lbl = QLabel("Installed: <i>checking…</i>")
+        self._installed_lbl.setStyleSheet(f"font-size: 12px; color: {theme.ink2};")
+        lay.addWidget(self._installed_lbl)
+
         from PySide6.QtWidgets import QRadioButton, QButtonGroup
         self._stable = QRadioButton("Stable")
         self._nightly = QRadioButton("Nightly")
         self._stable.setChecked(True)
+        grp = QButtonGroup(self)
+        self._stable_ver = QLabel("checking…")
+        self._nightly_ver = QLabel("checking…")
         for rb in (self._stable, self._nightly):
             rb.setStyleSheet("font-size: 13px; font-weight: 600; spacing: 8px;")
-        grp = QButtonGroup(self)
-        grp.addButton(self._stable)
-        grp.addButton(self._nightly)
-        lay.addWidget(self._stable)
-        lay.addWidget(self._nightly)
+            grp.addButton(rb)
+        for vl in (self._stable_ver, self._nightly_ver):
+            vl.setStyleSheet(f"font-size: 12px; color: {theme.ink3};")
+
+        for rb, vl in ((self._stable, self._stable_ver),
+                       (self._nightly, self._nightly_ver)):
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(rb)
+            row.addStretch()
+            row.addWidget(vl)
+            lay.addLayout(row)
 
         note = QLabel(
             "<b>Stable</b> is the tested release — recommended for most people.<br>"
@@ -243,6 +278,35 @@ class _YtDlpChannelDialog(QDialog):
         foot.addWidget(cancel)
         foot.addWidget(update_btn)
         lay.addLayout(foot)
+
+        # Fetch versions in the background. Parent the worker to the main window
+        # (not this dialog) and self-delete on finish, so it can't be destroyed
+        # mid-run when the dialog closes.
+        self._vworker = _VersionFetchWorker(parent)
+        self._vworker.done.connect(self._on_versions)
+        self._vworker.finished.connect(self._vworker.deleteLater)
+        self._vworker.start()
+
+    def _on_versions(self, versions: dict):
+        from core.ytdlp_updater import _parse_ver
+        installed = versions.get("installed")
+        inst_t = _parse_ver(installed) if installed else None
+        try:
+            self._installed_lbl.setText(
+                f"Installed: <b>{installed or 'unknown'}</b>")
+
+            def fill(ver_lbl, ver):
+                if not ver:
+                    ver_lbl.setText("unavailable")
+                elif inst_t is not None and _parse_ver(ver) == inst_t:
+                    ver_lbl.setText(f"<span style='color:#0E9F6E;'>✓</span> {ver}")
+                else:
+                    ver_lbl.setText(ver)
+
+            fill(self._stable_ver, versions.get("stable"))
+            fill(self._nightly_ver, versions.get("nightly"))
+        except RuntimeError:
+            pass   # dialog already closed/destroyed — ignore the late update
 
     def channel(self) -> str:
         return "nightly" if self._nightly.isChecked() else "stable"

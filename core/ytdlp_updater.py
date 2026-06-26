@@ -222,6 +222,23 @@ def _latest(channel: str, timeout: int) -> tuple[str, str]:
     return _nightly_latest(timeout) if channel == "nightly" else _pypi_latest(timeout)
 
 
+def latest_versions(timeout: int = 15) -> dict:
+    """Return {"stable": ver|None, "nightly": ver|None} in one PyPI request
+    (both channels live in the same package metadata)."""
+    import urllib.request
+
+    req = urllib.request.Request(
+        _PYPI_JSON, headers={"User-Agent": "RehearsalRoom-ytdlp-updater/1.0"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+
+    stable = data.get("info", {}).get("version") or None
+    nightlies = [v for v in data.get("releases", {}) if "dev" in v]
+    nightly = max(nightlies, key=_parse_ver) if nightlies else None
+    return {"stable": stable, "nightly": nightly}
+
+
 def _is_nightly(version: str | None) -> bool:
     """Nightly builds carry a PEP 440 '.dev' segment (e.g. 2026.6.24...dev0)."""
     return "dev" in (version or "")
