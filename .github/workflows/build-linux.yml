@@ -36,11 +36,15 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install --upgrade pip
+          # CPU-only torch. On Linux `pip install torch` defaults to the CUDA
+          # build (bundles nvidia-* libs, ~2.5 GB) — which blows past GitHub's
+          # 2 GB release-asset limit and isn't needed (GPU is a separate
+          # on-demand feature). Install it first so demucs reuses it.
+          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install \
             PySide6 \
             numpy \
             demucs \
-            torch torchaudio \
             soundfile sounddevice \
             yt-dlp imageio-ffmpeg \
             mutagen pyacoustid \
