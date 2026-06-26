@@ -2,7 +2,7 @@
 
 Rehearsal Room is intended as a practice tool for musicians: you can use it to split a music track (either from an audio file, or a YouTube URL) into "stems" -- i.e. separate files for i.e. vocals, drums, bass, and 'other' (e.g. guitar). Once this is done, you can play back the separate files simultaneously while controlling each part individually: for example, you can change the volume of a specific part, mute certain parts, or play just a single part (solo).
 
-In addition, you can slow the audio down without affecting the pitch, and loop a section of the track. Loops can be saved, so that you can recall them later.
+In addition, you can slow the audio down without affecting the pitch, change the pitch withouth affecting the speed, and loop a section of the track. Loops can be saved, so that you can recall them later.
 
 Bonus: fully supports Vidami footswitch for play/pause, forward/back, loop start/end/clear, and adjust playback speed.
 
