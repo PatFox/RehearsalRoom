@@ -222,13 +222,21 @@ def _latest(channel: str, timeout: int) -> tuple[str, str]:
     return _nightly_latest(timeout) if channel == "nightly" else _pypi_latest(timeout)
 
 
-def update(progress=None, timeout: int = 30,
-           channel: str = "stable") -> tuple[bool, str, str | None]:
+def _is_nightly(version: str | None) -> bool:
+    """Nightly builds carry a PEP 440 '.dev' segment (e.g. 2026.6.24...dev0)."""
+    return "dev" in (version or "")
+
+
+def update(progress=None, timeout: int = 30, channel: str = "stable",
+           force: bool = False) -> tuple[bool, str, str | None, str]:
     """Download the latest yt-dlp wheel if it's newer than what's active.
 
-    channel: "stable" (PyPI) or "nightly" (yt-dlp-nightly-builds GitHub repo).
+    channel: "stable" (PyPI latest release) or "nightly" (PyPI newest .dev).
+    force:   install the channel's latest even if it isn't newer (downgrade).
     progress(pct:int, msg:str) — optional callback.
-    Returns (changed, message, new_version).
+    Returns (changed, message, new_version, downgrade_to). downgrade_to is the
+    stable version string when the user is on a *newer* nightly and could force
+    a downgrade to stable; otherwise "".
     """
     import urllib.request
 
@@ -241,8 +249,15 @@ def update(progress=None, timeout: int = 30,
     latest, wheel_url = _latest(channel, timeout)
 
     current = active_version()
-    if _parse_ver(latest) <= _parse_ver(current):
-        return False, f"Already up to date (yt-dlp {current}).", current
+    if not force and _parse_ver(latest) <= _parse_ver(current):
+        if channel == "stable" and _is_nightly(current):
+            # Active build is a newer nightly than the latest stable — offer a
+            # forced downgrade rather than silently reporting "up to date".
+            return (False,
+                    f"You're on nightly {current}, which is newer than the "
+                    f"latest stable release ({latest}).",
+                    current, latest)
+        return False, f"Already up to date (yt-dlp {current}).", current, ""
 
     _p(20, f"Downloading yt-dlp {latest}…")
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -277,4 +292,4 @@ def update(progress=None, timeout: int = 30,
     _p(100, f"yt-dlp {latest} downloaded.")
     return True, (
         f"Updated yt-dlp to {latest}. Restart Rehearsal Room to use it."
-    ), latest
+    ), latest, ""

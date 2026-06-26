@@ -664,21 +664,22 @@ class _TrackLoadWorker(QThread):
 class _YtDlpUpdateWorker(QThread):
     """Downloads the latest yt-dlp wheel off the UI thread."""
     progress = Signal(int, str)
-    done = Signal(bool, str)   # changed, message
+    done = Signal(bool, str, str)   # changed, message, downgrade_to_stable ("" if none)
 
-    def __init__(self, channel: str = "stable", parent=None):
+    def __init__(self, channel: str = "stable", force: bool = False, parent=None):
         super().__init__(parent)
         self._channel = channel
+        self._force = force
 
     def run(self):
         try:
             from core import ytdlp_updater
-            changed, message, _ = ytdlp_updater.update(
-                channel=self._channel,
+            changed, message, _, downgrade = ytdlp_updater.update(
+                channel=self._channel, force=self._force,
                 progress=lambda p, m: self.progress.emit(p, m))
-            self.done.emit(changed, message)
+            self.done.emit(changed, message, downgrade)
         except Exception as exc:
-            self.done.emit(False, f"Update failed:\n\n{exc}")
+            self.done.emit(False, f"Update failed:\n\n{exc}", "")
 
 
 class MainWindow(QMainWindow):
@@ -1443,12 +1444,13 @@ class MainWindow(QMainWindow):
     def _update_ytdlp(self):
         """Download the latest yt-dlp so YouTube imports keep working between
         app releases (YouTube changes break frozen yt-dlp versions)."""
-        from PySide6.QtWidgets import QProgressDialog, QMessageBox
-
         chooser = _YtDlpChannelDialog(self._theme, self)
         if not chooser.exec():
             return   # cancelled
-        channel = chooser.channel()
+        self._run_ytdlp_update(chooser.channel())
+
+    def _run_ytdlp_update(self, channel: str, force: bool = False):
+        from PySide6.QtWidgets import QProgressDialog, QMessageBox
 
         dlg = QProgressDialog("Checking for yt-dlp updates…", None, 0, 100, self)
         dlg.setWindowTitle("YouTube downloader")
@@ -1458,16 +1460,28 @@ class MainWindow(QMainWindow):
         dlg.setAutoClose(False)
         dlg.setValue(0)
 
-        self._ytdlp_worker = _YtDlpUpdateWorker(channel, self)
+        self._ytdlp_worker = _YtDlpUpdateWorker(channel, force, self)
 
         def on_progress(pct, msg):
             dlg.setValue(pct)
             dlg.setLabelText(msg)
 
-        def on_done(changed, message):
+        def on_done(changed, message, downgrade):
             dlg.close()
             worker, self._ytdlp_worker = self._ytdlp_worker, None
             self._retire_worker(worker)
+            if downgrade:
+                # On a newer nightly than stable — offer a forced downgrade.
+                resp = QMessageBox.question(
+                    self, "Downgrade to stable?",
+                    f"{message}\n\nDowngrade to the stable release "
+                    f"({downgrade}) anyway?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if resp == QMessageBox.StandardButton.Yes:
+                    self._run_ytdlp_update("stable", force=True)
+                return
             QMessageBox.information(self, "YouTube downloader", message)
 
         self._ytdlp_worker.progress.connect(on_progress)
