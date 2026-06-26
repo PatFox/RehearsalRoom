@@ -26,6 +26,10 @@ from pathlib import Path
 
 CACHE_DIR = Path.home() / ".rehearsalroom" / "ytdlp"
 _PYPI_JSON = "https://pypi.org/pypi/yt-dlp/json"
+# Nightly builds are published to PyPI as ".dev" pre-releases (with wheels);
+# they carry fixes for new YouTube breakages before they reach a stable release.
+# (The yt-dlp-nightly-builds GitHub repo only ships standalone binaries, not an
+# importable wheel, so PyPI is the right source for our zipimport approach.)
 
 _finder = None  # the installed meta-path finder, if any
 
@@ -185,9 +189,44 @@ def _pypi_latest(timeout: int = 15) -> tuple[str, str]:
     return version, wheel_url
 
 
-def update(progress=None, timeout: int = 30) -> tuple[bool, str, str | None]:
+def _nightly_latest(timeout: int = 15) -> tuple[str, str]:
+    """Return (latest_version, wheel_url) for the newest nightly (.dev) build
+    published to PyPI. Raises on failure."""
+    import urllib.request
+
+    req = urllib.request.Request(
+        _PYPI_JSON, headers={"User-Agent": "RehearsalRoom-ytdlp-updater/1.0"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+
+    releases = data.get("releases", {})
+    nightlies = [v for v in releases if "dev" in v]
+    if not nightlies:
+        raise RuntimeError("No nightly yt-dlp builds found on PyPI.")
+    version = max(nightlies, key=_parse_ver)
+
+    wheel_url = ""
+    for f in releases[version]:
+        if (not f.get("yanked")
+                and f.get("packagetype") == "bdist_wheel"
+                and f.get("filename", "").endswith("-py3-none-any.whl")):
+            wheel_url = f["url"]
+            break
+    if not wheel_url:
+        raise RuntimeError("Latest nightly has no compatible yt-dlp wheel.")
+    return version, wheel_url
+
+
+def _latest(channel: str, timeout: int) -> tuple[str, str]:
+    return _nightly_latest(timeout) if channel == "nightly" else _pypi_latest(timeout)
+
+
+def update(progress=None, timeout: int = 30,
+           channel: str = "stable") -> tuple[bool, str, str | None]:
     """Download the latest yt-dlp wheel if it's newer than what's active.
 
+    channel: "stable" (PyPI) or "nightly" (yt-dlp-nightly-builds GitHub repo).
     progress(pct:int, msg:str) — optional callback.
     Returns (changed, message, new_version).
     """
@@ -197,8 +236,9 @@ def update(progress=None, timeout: int = 30) -> tuple[bool, str, str | None]:
         if progress:
             progress(pct, msg)
 
-    _p(5, "Checking PyPI for the latest yt-dlp…")
-    latest, wheel_url = _pypi_latest(timeout=timeout)
+    src = "nightly" if channel == "nightly" else "PyPI (stable)"
+    _p(5, f"Checking {src} for the latest yt-dlp…")
+    latest, wheel_url = _latest(channel, timeout)
 
     current = active_version()
     if _parse_ver(latest) <= _parse_ver(current):

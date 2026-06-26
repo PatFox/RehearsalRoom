@@ -193,6 +193,61 @@ class _UpToDateDialog(QDialog):
         lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignRight)
 
 
+class _YtDlpChannelDialog(QDialog):
+    """Choose which yt-dlp release channel to update from."""
+
+    def __init__(self, theme: Theme, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Update YouTube downloader")
+        self.setFixedWidth(420)
+        self.setModal(True)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 22)
+        lay.setSpacing(12)
+
+        title = QLabel("Update the YouTube downloader")
+        title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        lay.addWidget(title)
+
+        from PySide6.QtWidgets import QRadioButton, QButtonGroup
+        self._stable = QRadioButton("Stable")
+        self._nightly = QRadioButton("Nightly")
+        self._stable.setChecked(True)
+        for rb in (self._stable, self._nightly):
+            rb.setStyleSheet("font-size: 13px; font-weight: 600; spacing: 8px;")
+        grp = QButtonGroup(self)
+        grp.addButton(self._stable)
+        grp.addButton(self._nightly)
+        lay.addWidget(self._stable)
+        lay.addWidget(self._nightly)
+
+        note = QLabel(
+            "<b>Stable</b> is the tested release — recommended for most people.<br>"
+            "<b>Nightly</b> ships the very latest fixes (often the first to work "
+            "again after YouTube changes break downloads), but is less tested and "
+            "can occasionally be unstable."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(f"font-size: 12px; color: {theme.ink3};")
+        lay.addWidget(note)
+
+        foot = QHBoxLayout()
+        foot.addStretch()
+        cancel = QPushButton("Cancel")
+        cancel.setProperty("role", "ghost")
+        cancel.setFixedHeight(36)
+        cancel.clicked.connect(self.reject)
+        update_btn = QPushButton("Update")
+        update_btn.setFixedHeight(36)
+        update_btn.clicked.connect(self.accept)
+        foot.addWidget(cancel)
+        foot.addWidget(update_btn)
+        lay.addLayout(foot)
+
+    def channel(self) -> str:
+        return "nightly" if self._nightly.isChecked() else "stable"
+
+
 class _UpdateAvailableDialog(QDialog):
     def __init__(self, current: str, latest: str, url: str, theme: Theme, parent=None):
         super().__init__(parent)
@@ -611,10 +666,15 @@ class _YtDlpUpdateWorker(QThread):
     progress = Signal(int, str)
     done = Signal(bool, str)   # changed, message
 
+    def __init__(self, channel: str = "stable", parent=None):
+        super().__init__(parent)
+        self._channel = channel
+
     def run(self):
         try:
             from core import ytdlp_updater
             changed, message, _ = ytdlp_updater.update(
+                channel=self._channel,
                 progress=lambda p, m: self.progress.emit(p, m))
             self.done.emit(changed, message)
         except Exception as exc:
@@ -1385,6 +1445,11 @@ class MainWindow(QMainWindow):
         app releases (YouTube changes break frozen yt-dlp versions)."""
         from PySide6.QtWidgets import QProgressDialog, QMessageBox
 
+        chooser = _YtDlpChannelDialog(self._theme, self)
+        if not chooser.exec():
+            return   # cancelled
+        channel = chooser.channel()
+
         dlg = QProgressDialog("Checking for yt-dlp updates…", None, 0, 100, self)
         dlg.setWindowTitle("YouTube downloader")
         dlg.setWindowModality(Qt.WindowModal)
@@ -1393,7 +1458,7 @@ class MainWindow(QMainWindow):
         dlg.setAutoClose(False)
         dlg.setValue(0)
 
-        self._ytdlp_worker = _YtDlpUpdateWorker(self)
+        self._ytdlp_worker = _YtDlpUpdateWorker(channel, self)
 
         def on_progress(pct, msg):
             dlg.setValue(pct)
