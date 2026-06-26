@@ -1025,11 +1025,15 @@ class MainWindow(QMainWindow):
             safe = "".join(c for c in title if c.isalnum() or c in " _-").strip() or "track"
             out_path = _unique_stems_path(lib_dir, safe)
 
-            original_path = job.get("audio_path") or job.get("path", "")
-            # A .rrs template's job["path"] is the template, not audio — don't
-            # try to embed it as the original.
-            if job.get("kind") == "template":
-                original_path = job.get("audio_path", "")
+            # Only embed the source audio when the user opted in at import
+            # ("Retain original audio"); otherwise keep the .stems file small.
+            original_path = ""
+            if job.get("retain_original"):
+                original_path = job.get("audio_path") or job.get("path", "")
+                # A .rrs template's job["path"] is the template, not audio —
+                # don't try to embed it as the original.
+                if job.get("kind") == "template":
+                    original_path = job.get("audio_path", "")
             project = save_stems(
                 {k: Path(v) for k, v in stem_paths.items()},
                 out_path, title=title, artist=artist,
@@ -1290,8 +1294,10 @@ class MainWindow(QMainWindow):
         if not rrs:
             return
         # Re-import the template the normal way; delete the .rrs once it lands.
+        # Restoring preserves prior behaviour: keep the original audio embedded.
         job = {"kind": "template", "path": rrs, "model": "htdemucs",
-               "name": arch.get("title", ""), "archive_src": rrs}
+               "name": arch.get("title", ""), "archive_src": rrs,
+               "retain_original": True}
         self._on_import_started([job])
 
     def _on_delete_track(self, song: dict):

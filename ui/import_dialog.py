@@ -6,7 +6,7 @@ from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QFrame, QWidget, QFileDialog, QRadioButton, QButtonGroup,
-    QSizePolicy, QProgressBar, QMessageBox, QScrollArea, QLayout
+    QSizePolicy, QProgressBar, QMessageBox, QScrollArea, QLayout, QCheckBox
 )
 
 from ui.theme import Theme
@@ -307,6 +307,21 @@ class ImportDialog(QDialog):
             "htdemucs", "Balanced", "Fast, great for most tracks", checked=True))
         left_lay.addLayout(self._make_quality_option(
             "htdemucs_ft", "Fine-tuned", "Slower, cleaner separation"))
+
+        # Retain original — stores the source audio inside the .stems file so the
+        # track can be re-separated later without the source. Off by default to
+        # keep files small.
+        self._retain_original = QCheckBox("Retain original audio")
+        self._retain_original.setChecked(False)
+        self._retain_original.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._retain_original.setToolTip(
+            "Store the original audio inside the .stems file. Lets you re-separate "
+            "the track later without the source, but makes the file larger.")
+        self._retain_original.setStyleSheet(
+            f"QCheckBox {{ font-size: 13px; color: {self._theme.ink}; spacing: 8px; "
+            f"margin-top: 6px; }}")
+        left_lay.addWidget(self._retain_original)
+
         left_lay.addStretch()
 
         cols.addWidget(left)
@@ -476,22 +491,26 @@ class ImportDialog(QDialog):
             if self._queue.count() == 0:
                 return
 
+        retain = self._retain_original.isChecked()
         jobs: list[dict] = []
         for key, kind in self._queue.items():
             if kind == "youtube":
                 jobs.append({
                     "kind": "youtube", "url": key,
                     "model": self._model, "name": "",
+                    "retain_original": retain,
                 })
             elif kind == "template":
                 jobs.append({
                     "kind": "template", "path": key,
                     "model": self._model, "name": os.path.basename(key),
+                    "retain_original": retain,
                 })
             else:
                 jobs.append({
                     "kind": "file", "path": key,
                     "model": self._model, "name": os.path.basename(key),
+                    "retain_original": retain,
                 })
 
         if jobs:
