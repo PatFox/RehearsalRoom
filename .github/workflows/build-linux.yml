@@ -19,17 +19,22 @@ jobs:
     # Covers Ubuntu 20.04+, Debian 10+, Fedora 29+, RHEL/CentOS 8+.
     container: quay.io/pypa/manylinux_2_28_x86_64
     env:
-      PYBIN: /opt/python/cp311-cp311/bin
+      # The venv built from AlmaLinux's shared-library python3.11 (see below).
+      PYBIN: /opt/venv/bin
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      # System libraries the Qt .so's link against, so PyInstaller can import
-      # PySide6 during the build. (AlmaLinux 8 base — dnf, not apt.)
-      - name: Install system Qt dependencies
+      # System libraries the Qt .so's link against (so PyInstaller can import
+      # PySide6 during the build) plus a shared-library Python. manylinux's
+      # /opt/python interpreters are STATIC (no libpython.so), which PyInstaller
+      # rejects; AlmaLinux 8's python3.11 is a shared build, so we use it via a
+      # venv. (AlmaLinux 8 base — dnf, not apt.)
+      - name: Install system dependencies
         run: |
           dnf install -y \
+            python3.11 python3.11-devel python3.11-pip \
             mesa-libGL mesa-libEGL \
             libxkbcommon libxkbcommon-x11 \
             libX11 libXext libXrender fontconfig freetype \
@@ -37,6 +42,7 @@ jobs:
             xcb-util-cursor xcb-util-image xcb-util-keysyms \
             xcb-util-renderutil xcb-util-wm \
             wget file
+          python3.11 -m venv /opt/venv
 
       - name: Install Python dependencies
         run: |
