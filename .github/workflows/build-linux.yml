@@ -42,7 +42,12 @@ jobs:
             xcb-util-cursor xcb-util-image xcb-util-keysyms \
             xcb-util-renderutil xcb-util-wm \
             wget file
-          python3.11 -m venv /opt/venv
+          # Use the dnf python by ABSOLUTE path: bare `python3.11` resolves to
+          # manylinux's static interpreter (which shadows /usr/bin on PATH), and
+          # PyInstaller needs a shared-library build. AlmaLinux's /usr/bin one is
+          # shared. Fail fast if that ever stops being true.
+          /usr/bin/python3.11 -m venv /opt/venv
+          /opt/venv/bin/python -c "import sysconfig, sys; sys.exit(0 if sysconfig.get_config_var('Py_ENABLE_SHARED') else 'ERROR: venv python is static (no libpython.so)')"
 
       - name: Install Python dependencies
         run: |
