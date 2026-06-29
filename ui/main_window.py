@@ -1353,17 +1353,26 @@ class MainWindow(QMainWindow):
         self._process_next_job()
 
     def _on_download_error(self, msg: str, token: int | None = None):
-        """A YouTube download failed — most often because the bundled yt-dlp
-        has gone stale. Offer to open the updater."""
+        """A YouTube download failed. Most failures mean the bundled yt-dlp has
+        gone stale, so we offer the updater — except age-restricted videos,
+        which updating can't fix, so those get the specific message instead."""
         if token is not None and token != self._gen:
             return   # stale error from a cancelled/retired worker
         self._pending_job = None
         if self._job_total > 0:
             self._job_total -= 1
-        dlg = _DownloadFailedDialog(msg, self._theme, self)
-        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dlg.check_requested.connect(self._update_ytdlp)
-        dlg.show()
+
+        from core.downloader import _is_age_restricted
+        if _is_age_restricted(msg):
+            dlg = _ErrorDialog(msg, self)
+            dlg.setModal(False)
+            dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            dlg.show()
+        else:
+            dlg = _DownloadFailedDialog(msg, self._theme, self)
+            dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            dlg.check_requested.connect(self._update_ytdlp)
+            dlg.show()
         self._process_next_job()
 
     def closeEvent(self, event):
