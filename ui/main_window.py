@@ -193,6 +193,67 @@ class _UpToDateDialog(QDialog):
         lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignRight)
 
 
+class _DownloadFailedDialog(QDialog):
+    """Shown when a YouTube download fails — suggests updating yt-dlp and
+    offers to open the updater."""
+    check_requested = Signal()
+
+    def __init__(self, message: str, theme: Theme, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Download failed")
+        self.setFixedWidth(460)
+        self.setModal(False)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 22)
+        lay.setSpacing(12)
+
+        title = QLabel("Couldn't download from YouTube")
+        title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        lay.addWidget(title)
+
+        msg = QLabel(message)
+        msg.setWordWrap(True)
+        msg.setAlignment(Qt.AlignmentFlag.AlignTop)
+        msg.setStyleSheet(
+            f"font-family: 'Consolas', monospace; font-size: 11.5px; "
+            f"color: {theme.ink2}; background: {theme.surface2}; "
+            f"border-radius: 4px; padding: 10px;")
+        screen = (parent.screen() if parent else None) or QApplication.primaryScreen()
+        avail_h = screen.availableGeometry().height() if screen else 800
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setMaximumHeight(max(120, int(avail_h * 0.4)))
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        scroll.setWidget(msg)
+        lay.addWidget(scroll)
+
+        explain = QLabel(
+            "This often happens when YouTube changes and the downloader "
+            "(yt-dlp) needs updating. You can check for an update now.")
+        explain.setWordWrap(True)
+        explain.setStyleSheet(f"font-size: 12px; color: {theme.ink3};")
+        lay.addWidget(explain)
+
+        foot = QHBoxLayout()
+        foot.addStretch()
+        cancel = QPushButton("Cancel")
+        cancel.setProperty("role", "ghost")
+        cancel.setFixedHeight(36)
+        cancel.clicked.connect(self.reject)
+        check = QPushButton("Check Now")
+        check.setFixedHeight(36)
+        check.clicked.connect(self._on_check)
+        foot.addWidget(cancel)
+        foot.addWidget(check)
+        lay.addLayout(foot)
+
+    def _on_check(self):
+        self.check_requested.emit()
+        self.accept()
+
+
 class _VersionFetchWorker(QThread):
     """Fetches the installed + latest stable/nightly yt-dlp versions off the
     UI thread (the latest versions are a network call to PyPI)."""
@@ -1065,7 +1126,7 @@ class MainWindow(QMainWindow):
         self._dl_worker.finished.connect(
             lambda path, info, t=token: self._on_download_done(path, info, job, t))
         self._dl_worker.error.connect(
-            lambda m, t=token: self._on_job_error(m, t))
+            lambda m, t=token: self._on_download_error(m, t))
         self._dl_worker.start()
 
     def _on_download_done(self, path: str, info: dict, job: dict, token: int):
@@ -1288,6 +1349,20 @@ class MainWindow(QMainWindow):
         dlg = _ErrorDialog(f"Processing failed:\n\n{msg}", self)
         dlg.setModal(False)
         dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dlg.show()
+        self._process_next_job()
+
+    def _on_download_error(self, msg: str, token: int | None = None):
+        """A YouTube download failed — most often because the bundled yt-dlp
+        has gone stale. Offer to open the updater."""
+        if token is not None and token != self._gen:
+            return   # stale error from a cancelled/retired worker
+        self._pending_job = None
+        if self._job_total > 0:
+            self._job_total -= 1
+        dlg = _DownloadFailedDialog(msg, self._theme, self)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dlg.check_requested.connect(self._update_ytdlp)
         dlg.show()
         self._process_next_job()
 
