@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # System libraries the Qt .so's link against (so PyInstaller can import
       # PySide6 during the build) plus a shared-library Python. manylinux's
@@ -139,7 +139,7 @@ jobs:
 
       # ── Upload both artifacts to the GitHub Release ────────────────────
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # The release was already created by release.bat on Windows;
           # this step attaches the Linux artifacts to it.
