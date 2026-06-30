@@ -105,6 +105,10 @@ def fetch_audio(url, output_dir=None, progress=None, on_info=None, should_cancel
         "quiet": True,
         "no_warnings": False,
         "no_color": True,          # don't leak ANSI colour codes into messages
+        # Download only the single video, never the playlist. Without this a
+        # URL like a YouTube "radio" mix (…&list=RD…&start_radio=1) is treated
+        # as an endless playlist and the import never finishes.
+        "noplaylist": True,
         "socket_timeout": 30,
         "retries": 5,
         "fragment_retries": 5,
