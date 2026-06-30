@@ -125,10 +125,18 @@ QLineEdit {{
     padding: 10px 13px;
     font-size: 14px;
     selection-background-color: {acc_soft};
+    selection-color: {self.ink};
 }}
 QLineEdit:focus {{
     border-color: {acc};
     background: {self.surface};
+}}
+
+/* Readable selection in multi-line text widgets too (default is
+   white-on-light-blue, which is too low-contrast). */
+QTextEdit, QPlainTextEdit {{
+    selection-background-color: {acc_soft};
+    selection-color: {self.ink};
 }}
 
 /* === labels === */
