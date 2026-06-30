@@ -1,7 +1,14 @@
 name: Build macOS Release
 
-# Triggers whenever release.bat pushes a version tag (e.g. v1.0.0)
+# Called by the Release workflow with an explicit version, or triggered
+# directly by pushing a v* tag (manual fallback).
 on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to build (x.y.z). Omit to use the pushed tag."
+        required: false
+        type: string
   push:
     tags:
       - 'v*'
@@ -13,18 +20,25 @@ jobs:
       contents: write
 
     steps:
-      # ── Checkout ──────────────────────────────────────────────────────
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then V="${{ inputs.version }}"; else V="${{ github.ref_name }}"; V="${V#v}"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
+
       - name: Checkout source
         uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.ver.outputs.tag }}
 
-      # ── Python ────────────────────────────────────────────────────────
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      # ── Dependencies ──────────────────────────────────────────────────
       - name: Install dependencies
         run: |
           pip install --upgrade pip
@@ -38,18 +52,15 @@ jobs:
             mutagen pyacoustid \
             pyinstaller
 
-      # ── Build .app bundle ─────────────────────────────────────────────
       - name: Build with PyInstaller
         run: pyinstaller installer/rehearsalroom_mac.spec
 
-      # ── Package as DMG ────────────────────────────────────────────────
       - name: Install create-dmg
         run: brew install create-dmg
 
       - name: Create DMG
         run: |
-          VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"   # strip leading 'v'
+          VERSION="${{ steps.ver.outputs.version }}"
           mkdir -p dist/dmg
           cp -r "dist/RehearsalRoom.app" dist/dmg/
           create-dmg \
@@ -73,11 +84,9 @@ jobs:
               "dist/RehearsalRoom-v${VERSION}-mac.dmg"
           fi
 
-      # ── Upload to the GitHub Release ──────────────────────────────────
       - name: Upload DMG to release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ steps.ver.outputs.tag }}
           files: dist/RehearsalRoom-v*-mac.dmg
-          # The release was already created by release.bat on Windows;
-          # this step just attaches the Mac DMG to it.
           fail_on_unmatched_files: true

@@ -1,0 +1,106 @@
+name: Release
+run-name: Release ${{ inputs.version != '' && format('v{0}', inputs.version) || '(auto-increment)' }}
+
+# Manual, GitHub-driven release. In the Actions tab choose "Release" → "Run
+# workflow", optionally type a version (blank = auto-increment the patch) and
+# the release notes. This stamps core/version.py, commits it, tags, creates the
+# GitHub release, then builds and attaches the Windows/macOS/Linux installers.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version x.y.z (leave blank to auto-increment the patch)"
+        required: false
+        type: string
+      notes:
+        description: "Release notes"
+        required: true
+        type: string
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Determine version
+        id: v
+        shell: bash
+        env:
+          VERSION_IN: ${{ inputs.version }}
+        run: |
+          if [ -n "$VERSION_IN" ]; then
+            V="$VERSION_IN"
+          else
+            CUR=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' core/version.py | head -n1)
+            IFS=. read -r a b c <<< "$CUR"
+            V="$a.$b.$((c + 1))"
+            echo "Auto-incremented $CUR -> $V"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp version.py
+        shell: bash
+        run: |
+          python - "${{ steps.v.outputs.version }}" <<'PY'
+          import re, sys
+          v = sys.argv[1]
+          c = open("core/version.py").read()
+          c = re.sub(r'__version__\s*=\s*.*', f'__version__ = "{v}"', c)
+          open("core/version.py", "w").write(c)
+          PY
+
+      - name: Commit, tag and create the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          V="${{ steps.v.outputs.version }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/version.py
+          git commit -m "Release v$V" || echo "core/version.py already at v$V"
+          git push
+          git tag "v$V"
+          git push origin "v$V"
+          gh release create "v$V" --title "v$V" --notes "$NOTES"
+
+  # Build jobs run after the tag + release exist; each reusable workflow checks
+  # out the tag (so it builds the stamped version) and attaches its installer.
+  windows:
+    needs: prepare
+    permissions:
+      contents: write
+    secrets: inherit
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+
+  macos:
+    needs: prepare
+    permissions:
+      contents: write
+    secrets: inherit
+    uses: ./.github/workflows/build-mac.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+
+  linux:
+    needs: prepare
+    permissions:
+      contents: write
+    secrets: inherit
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}

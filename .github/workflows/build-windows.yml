@@ -1,7 +1,14 @@
 name: Build Windows Release
 
-# Triggers whenever release.bat pushes a version tag (e.g. v1.0.0)
+# Called by the Release workflow with an explicit version, or triggered
+# directly by pushing a v* tag (manual fallback).
 on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to build (x.y.z). Omit to use the pushed tag."
+        required: false
+        type: string
   push:
     tags:
       - 'v*'
@@ -13,8 +20,18 @@ jobs:
       contents: write
 
     steps:
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then V="${{ inputs.version }}"; else V="${{ github.ref_name }}"; V="${V#v}"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
+
       - name: Checkout source
         uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.ver.outputs.tag }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -44,14 +61,11 @@ jobs:
       # the Program Files (x86) path Chocolatey installs to.
       - name: Build executable and installer
         shell: cmd
-        run: |
-          set VERSION=${{ github.ref_name }}
-          set VERSION=%VERSION:~1%
-          call build.bat %VERSION%
+        run: call build.bat ${{ steps.ver.outputs.version }}
 
       - name: Upload installer to release
         uses: softprops/action-gh-release@v3
         with:
-          # The release is created by release.bat; this attaches the installer.
+          tag_name: ${{ steps.ver.outputs.tag }}
           files: installer/output/RehearsalRoom-v*-Setup.exe
           fail_on_unmatched_files: true
