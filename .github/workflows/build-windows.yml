@@ -1,0 +1,57 @@
+name: Build Windows Release
+
+# Triggers whenever release.bat pushes a version tag (e.g. v1.0.0)
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # CPU-only torch (matches the other platforms; keeps the bundle small).
+          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install `
+            PySide6 `
+            numpy `
+            demucs `
+            soundfile sounddevice `
+            yt-dlp imageio-ffmpeg `
+            mutagen pyacoustid `
+            pyinstaller
+
+      # build.bat runs PyInstaller + Inno Setup and writes
+      # installer\output\RehearsalRoom-v<version>-Setup.exe. It finds ISCC at
+      # the Program Files (x86) path Chocolatey installs to.
+      - name: Build executable and installer
+        shell: cmd
+        run: |
+          set VERSION=${{ github.ref_name }}
+          set VERSION=%VERSION:~1%
+          call build.bat %VERSION%
+
+      - name: Upload installer to release
+        uses: softprops/action-gh-release@v2
+        with:
+          # The release is created by release.bat; this attaches the installer.
+          files: installer/output/RehearsalRoom-v*-Setup.exe
+          fail_on_unmatched_files: true
