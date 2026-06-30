@@ -218,11 +218,18 @@ class StemPlayer:
                 pass
             self._stream = None
         if self._stream is None:
+            # On Linux the default ALSA buffer is tight and underruns (audible
+            # crackle / "underrun occurred"). Request a larger buffer via higher
+            # latency there; keep the low-latency default on Windows/macOS so
+            # play/loop stays responsive.
+            import sys
+            latency = "high" if sys.platform.startswith("linux") else None
             self._stream = sd.OutputStream(
                 samplerate=self._sr,
                 channels=2,
                 dtype="float32",
                 blocksize=1024,
+                latency=latency,
                 callback=self._callback,
                 finished_callback=self._on_finished,
             )
