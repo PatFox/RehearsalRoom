@@ -47,11 +47,24 @@ class ModelDownloadWorker(QThread):
 
     def run(self):
         try:
+            import torch.hub
             import tqdm as _tqdm_mod
-            _orig = _tqdm_mod.tqdm
+            try:
+                import tqdm.auto as _tqdm_auto
+            except Exception:
+                _tqdm_auto = None
+
+            # The weights are fetched by torch.hub.download_url_to_file, which
+            # uses the `tqdm` bound in the torch.hub module. torch.hub does
+            # `from tqdm import tqdm` AT IMPORT TIME, so torch.hub.tqdm is the
+            # real consumer here — patching only tqdm.tqdm (a different binding)
+            # leaves the download bar unhooked and the progress bar never moves.
+            # Patch every name the download path might use across torch/tqdm
+            # versions and restore them afterwards.
+            _base = getattr(torch.hub, "tqdm", None) or _tqdm_mod.tqdm
             _emit = lambda pct, msg: self.progress.emit(pct, msg)
 
-            class _ProgressTqdm(_orig):
+            class _ProgressTqdm(_base):
                 def update(self, n=1):
                     result = super().update(n)
                     if self.total:
@@ -60,16 +73,20 @@ class ModelDownloadWorker(QThread):
                     return result
 
             self.progress.emit(1, "Preparing model download…")
-            # NOTE: module-global mutation — safe only because this runs once,
-            # at first launch, before any other tqdm user exists.
-            _tqdm_mod.tqdm = _ProgressTqdm
+            targets = [(_tqdm_mod, "tqdm"), (torch.hub, "tqdm")]
+            if _tqdm_auto is not None:
+                targets.append((_tqdm_auto, "tqdm"))
+            saved = [(mod, attr, getattr(mod, attr, None)) for mod, attr in targets]
+            for mod, attr in targets:
+                setattr(mod, attr, _ProgressTqdm)
             try:
                 from demucs.pretrained import get_model
-                import torch
                 model = get_model(self.model_name)
                 _ = model  # ensure fully loaded
             finally:
-                _tqdm_mod.tqdm = _orig
+                for mod, attr, old in saved:
+                    if old is not None:
+                        setattr(mod, attr, old)
 
             self.progress.emit(100, "Model ready.")
             _mark_model_cached(self.model_name)
