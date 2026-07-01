@@ -733,6 +733,20 @@ class _FootswitchFilter(QObject):
                 self._panel.toggle_play()
                 return True   # consumed — don't let the focused button see it
 
+            # Left/Right seek -/+2s in the track view, regardless of which
+            # control has focus — otherwise arrows just move focus and seeking
+            # "doesn't always work". Leave arrows to controls that use them
+            # themselves: sliders / spin boxes / combos (nudge value) and the
+            # tab editor (caret navigation).
+            if (event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right) and plain
+                    and self._panel.isVisible()):
+                from PySide6.QtWidgets import QAbstractSlider, QAbstractSpinBox
+                from ui.tab_editor import TabTimeline
+                if not isinstance(focused, (QAbstractSlider, QAbstractSpinBox,
+                                            QComboBox, TabTimeline)):
+                    self._panel.skip(-2000 if event.key() == Qt.Key.Key_Left else 2000)
+                    return True
+
             # Vidami footswitch routing (only when enabled).
             if S.get("vidami_enabled"):
                 char = event.text()

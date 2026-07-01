@@ -1610,6 +1610,10 @@ class PlayerPanel(QWidget):
         """Public: toggle play/pause (used by the global spacebar handler)."""
         self._toggle_play()
 
+    def skip(self, ms: int):
+        """Public: seek by *ms* (used by the global arrow-key handler)."""
+        self._skip(ms)
+
     def _seek(self, progress: float, user_initiated: bool = False):
         self._time_ms = progress * self._duration
         self._disp_ms = self._time_ms     # snap the smoothed clock, no glide
@@ -1925,9 +1929,9 @@ class PlayerPanel(QWidget):
         elif e.key() == Qt.Key.Key_L:
             self._on_loop_button()
         elif e.key() == Qt.Key.Key_Left:
-            self._skip(-5000)
+            self._skip(-2000)
         elif e.key() == Qt.Key.Key_Right:
-            self._skip(5000)
+            self._skip(2000)
         else:
             super().keyPressEvent(e)
 
